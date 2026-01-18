@@ -61,9 +61,17 @@ class DataStorageService:
             Market object or None on error
         """
         def _store_market_impl(sess):
+            # Get market_id from various possible fields
+            market_id = market_data.get('id') or market_data.get('market_id')
+
+            # Skip if no valid market_id
+            if not market_id:
+                logger.debug("Skipping market storage: no market_id")
+                return None
+
             # Convert API format to DB format
             db_market_data = {
-                'market_id': market_data.get('id') or market_data.get('market_id'),
+                'market_id': market_id,
                 'slug': market_data.get('slug'),
                 'question': market_data.get('question'),
                 'description': market_data.get('description'),
@@ -79,7 +87,7 @@ class DataStorageService:
             }
 
             market = MarketRepository.create_or_update_market(sess, db_market_data)
-            logger.info(f"Stored market: {market.market_id}")
+            logger.debug(f"Stored market: {market.market_id}")
             return market
 
         try:

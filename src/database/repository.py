@@ -33,7 +33,7 @@ class TradeRepository:
             trade = Trade(**trade_data)
             session.add(trade)
             session.flush()  # Get the ID
-            logger.info(f"Created trade: {trade.id} (wallet: {trade.wallet_address[:10]}..., ${trade.bet_size_usd:,.2f})")
+            logger.debug(f"Created trade: {trade.id} (wallet: {trade.wallet_address[:10]}..., ${trade.bet_size_usd:,.2f})")
             return trade
 
         except IntegrityError as e:
@@ -193,7 +193,7 @@ class MarketRepository:
             # Create new
             market = Market(**market_data)
             session.add(market)
-            logger.info(f"Created market: {market_id}")
+            logger.debug(f"Created market: {market_id}")
 
         session.flush()
         return market
@@ -253,7 +253,7 @@ class WalletRepository:
             metrics = WalletMetrics(wallet_address=wallet_address)
             session.add(metrics)
             session.flush()
-            logger.info(f"Created wallet metrics for {wallet_address[:10]}...")
+            logger.debug(f"Created wallet metrics for {wallet_address[:10]}...")
 
         return metrics
 
@@ -315,7 +315,7 @@ class WalletRepository:
         metrics.last_calculated = datetime.now(timezone.utc)
 
         session.flush()
-        logger.info(f"Updated wallet metrics for {wallet_address[:10]}... ({metrics.total_trades} trades)")
+        logger.debug(f"Updated wallet metrics for {wallet_address[:10]}... ({metrics.total_trades} trades)")
 
         return metrics
 
