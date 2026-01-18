@@ -1,0 +1,41 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(python:*)",
+      "Bash(powershell -Command \"Add-Type -AssemblyName System.IO.Compression.FileSystem; $zip = [System.IO.Compression.ZipFile]::OpenRead\\(''Geopolitical Insider Trading Detection System.docx''\\); $entry = $zip.Entries | Where-Object { $_FullName -eq ''word/document.xml'' }; $stream = $entry.Open\\(\\); $reader = New-Object System.IO.StreamReader\\($stream\\); $content = $reader.ReadToEnd\\(\\); $reader.Close\\(\\); $stream.Close\\(\\); $zip.Dispose\\(\\); [xml]$xml = $content; $xml.document.body.InnerText\")",
+      "Bash(powershell -Command \"$word = New-Object -ComObject Word.Application; $word.Visible = $false; $doc = $word.Documents.Open\\(''C:\\\\Users\\\\Cursist\\\\InsiderTradingDetection\\\\Geopolitical Insider Trading Detection System.docx''\\); $doc.Content.Text; $doc.Close\\(\\); $word.Quit\\(\\)\")",
+      "Bash(powershell -ExecutionPolicy Bypass -File read_docx.ps1)",
+      "Bash(powershell Expand-Archive -Path \"Geopolitical Insider Trading Detection System.docx\" -DestinationPath \"temp_docx\" -Force)",
+      "Bash(powershell Expand-Archive -Path \"''Geopolitical Insider Trading Detection System.docx''\" -DestinationPath \"''temp_docx''\" -Force)",
+      "Bash(copy \"Geopolitical Insider Trading Detection System.docx\" temp_doc.zip)",
+      "Bash(powershell Expand-Archive:*)",
+      "Bash(powershell -ExecutionPolicy Bypass -File extract_text.ps1)",
+      "Bash(git init:*)",
+      "Bash(tree:*)",
+      "Bash(powershell tree /F)",
+      "Bash(powershell \"Get-Command python* | Select-Object -ExpandProperty Source\")",
+      "Bash(venv\\\\Scripts\\\\python.exe -m pip:*)",
+      "Bash(venv/Scripts/python.exe -m pip:*)",
+      "Bash(venv/Scripts/python.exe:*)",
+      "Bash(.venvScriptspython.exe scriptstest_database_integration.py)",
+      "Bash(where:*)",
+      "Bash(pip install:*)",
+      "Bash(timeout 15 tail:*)",
+      "WebFetch(domain:pizzint.io)",
+      "WebSearch",
+      "WebFetch(domain:www.pizzint.watch)",
+      "Bash(timeout 5 tail:*)",
+      "Bash(timeout:*)",
+      "Bash(set MIN_BET_SIZE_USD=1000)",
+      "Bash(streamlit run:*)",
+      "Bash(ping:*)",
+      "Bash(tasklist /FI \"WINDOWTITLE eq *monitor*\")",
+      "Bash(findstr:*)",
+      "Bash(tasklist:*)",
+      "Bash(dir:*)",
+      "Bash(set PYTHONPATH=C:UsersCursistInsiderTradingDetectionsrc)",
+      "Bash(git remote add:*)",
+      "Bash(git remote set-url:*)"
+    ]
+  }
+}
