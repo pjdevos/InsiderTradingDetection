@@ -6,6 +6,7 @@ aiohttp==3.9.1
 web3==6.11.3
 
 # Database
+psycopg2-binary>=2.9.9
 psycopg[binary]>=3.1.0
 sqlalchemy==2.0.23
 alembic==1.13.1
