@@ -2,6 +2,7 @@
 Database connection and session management
 """
 import logging
+import time
 from contextlib import contextmanager
 from typing import Generator
 
@@ -18,6 +19,10 @@ logger = logging.getLogger(__name__)
 _engine = None
 _SessionFactory = None
 
+# Retry settings for Railway private networking
+MAX_RETRIES = 10
+INITIAL_DELAY = 2  # seconds
+
 
 def init_db(database_url: str = None, echo: bool = False):
     """
@@ -26,44 +31,74 @@ def init_db(database_url: str = None, echo: bool = False):
     Args:
         database_url: Database connection string (defaults to config)
         echo: Whether to log SQL queries
+
+    Note:
+        Includes retry logic for Railway private networking DNS resolution
     """
     global _engine, _SessionFactory
 
     database_url = database_url or config.DATABASE_URL
 
-    logger.info(f"Initializing database connection...")
+    logger.info("Initializing database connection...")
 
-    # Create engine
-    _engine = create_engine(
-        database_url,
-        echo=echo,
-        pool_pre_ping=True,  # Verify connections before using
-        pool_size=10,
-        max_overflow=20,
-        pool_recycle=3600,  # Recycle connections after 1 hour
-    )
+    # Retry loop for Railway private networking DNS resolution
+    last_error = None
+    for attempt in range(MAX_RETRIES):
+        try:
+            # Create engine
+            _engine = create_engine(
+                database_url,
+                echo=echo,
+                pool_pre_ping=True,  # Verify connections before using
+                pool_size=10,
+                max_overflow=20,
+                pool_recycle=3600,  # Recycle connections after 1 hour
+            )
 
-    # Add connection pool logging
-    @event.listens_for(Pool, "connect")
-    def receive_connect(dbapi_conn, connection_record):
-        logger.debug("Database connection established")
+            # Add connection pool logging (only on first successful attempt)
+            if attempt == 0:
+                @event.listens_for(Pool, "connect")
+                def receive_connect(dbapi_conn, connection_record):
+                    logger.debug("Database connection established")
 
-    @event.listens_for(Pool, "checkout")
-    def receive_checkout(dbapi_conn, connection_record, connection_proxy):
-        logger.debug("Connection checked out from pool")
+                @event.listens_for(Pool, "checkout")
+                def receive_checkout(dbapi_conn, connection_record, connection_proxy):
+                    logger.debug("Connection checked out from pool")
 
-    # Create session factory
-    _SessionFactory = sessionmaker(bind=_engine, expire_on_commit=False)
+            # Create session factory
+            _SessionFactory = sessionmaker(bind=_engine, expire_on_commit=False)
 
-    # Create all tables
-    try:
-        Base.metadata.create_all(_engine)
-        logger.info("Database tables created successfully")
-    except Exception as e:
-        logger.error(f"Error creating database tables: {e}", exc_info=True)
-        raise
+            # Create all tables - this is where connection actually happens
+            Base.metadata.create_all(_engine)
+            logger.info("Database tables created successfully")
+            return _engine
 
-    return _engine
+        except Exception as e:
+            last_error = e
+            error_msg = str(e).lower()
+
+            # Check if it's a DNS/network error (Railway private networking not ready)
+            if "could not translate host name" in error_msg or \
+               "name or service not known" in error_msg or \
+               "connection refused" in error_msg or \
+               "timeout" in error_msg:
+
+                delay = INITIAL_DELAY * (2 ** attempt)  # Exponential backoff
+                delay = min(delay, 30)  # Cap at 30 seconds
+
+                logger.warning(
+                    f"Database connection failed (attempt {attempt + 1}/{MAX_RETRIES}): {e}. "
+                    f"Retrying in {delay}s..."
+                )
+                time.sleep(delay)
+            else:
+                # Non-retryable error
+                logger.error(f"Error creating database connection: {e}", exc_info=True)
+                raise
+
+    # All retries exhausted
+    logger.error(f"Failed to connect to database after {MAX_RETRIES} attempts")
+    raise last_error
 
 
 def get_engine():
