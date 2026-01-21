@@ -14,6 +14,32 @@ from config import config
 logger = logging.getLogger(__name__)
 
 
+# Conditional Tokens ABI - minimal ABI for resolution queries
+CONDITIONAL_TOKENS_ABI = [
+    {
+        "constant": True,
+        "inputs": [{"name": "conditionId", "type": "bytes32"}],
+        "name": "payoutNumerators",
+        "outputs": [{"name": "", "type": "uint256[]"}],
+        "type": "function"
+    },
+    {
+        "constant": True,
+        "inputs": [{"name": "conditionId", "type": "bytes32"}],
+        "name": "payoutDenominator",
+        "outputs": [{"name": "", "type": "uint256"}],
+        "type": "function"
+    },
+    {
+        "constant": True,
+        "inputs": [{"name": "conditionId", "type": "bytes32"}],
+        "name": "getOutcomeSlotCount",
+        "outputs": [{"name": "", "type": "uint256"}],
+        "type": "function"
+    }
+]
+
+
 # Blockchain scanning limits to prevent resource exhaustion
 POLYGON_BLOCKS_PER_DAY = 43200  # ~2 seconds per block
 MAX_WALLET_AGE_SCAN_DAYS = 7  # Limit wallet age scan to 7 days (vs 30 days before)
@@ -554,6 +580,210 @@ class BlockchainClient:
         except Exception as e:
             logger.error(f"Error getting transaction count for {wallet_address}: {e}")
             return None
+
+    def get_market_resolution(self, condition_id: str) -> Optional[Dict]:
+        """
+        Get market resolution outcome from Conditional Tokens contract.
+
+        Polymarket uses Gnosis Conditional Tokens for market resolution.
+        The payoutNumerators function returns the winning outcome.
+
+        Args:
+            condition_id: The condition ID (bytes32 hex string, e.g., "0x123...")
+                         This is the market's conditionId from Polymarket API
+
+        Returns:
+            Dict with resolution data:
+            - resolved: bool - Whether market has been resolved
+            - winning_outcome: str - "YES", "NO", or None if not resolved
+            - payout_numerators: list - Raw payout values [yes_payout, no_payout]
+            - outcome_count: int - Number of outcomes (usually 2)
+            - source: str - "blockchain" or "unavailable"
+
+            Returns None on error
+        """
+        if not self.is_connected():
+            logger.error("Not connected to blockchain")
+            return None
+
+        # Validate condition_id format
+        if not condition_id:
+            logger.error("Condition ID cannot be empty")
+            return None
+
+        if not condition_id.startswith('0x'):
+            condition_id = '0x' + condition_id
+
+        # Condition IDs are 32 bytes = 64 hex chars + '0x' = 66 chars
+        if len(condition_id) != 66:
+            logger.error(f"Invalid condition ID length: expected 66 chars, got {len(condition_id)}")
+            return None
+
+        try:
+            # Get Conditional Tokens contract
+            ct_address = config.CONTRACTS.get('CONDITIONAL_TOKENS')
+            if not ct_address:
+                logger.error("CONDITIONAL_TOKENS contract address not configured")
+                return None
+
+            contract = self.w3.eth.contract(
+                address=self.w3.to_checksum_address(ct_address),
+                abi=CONDITIONAL_TOKENS_ABI
+            )
+
+            # Convert condition_id to bytes32
+            condition_bytes = bytes.fromhex(condition_id[2:])
+
+            # Get payout numerators (returns array like [1, 0] or [0, 1] or [0, 0])
+            payout_numerators = contract.functions.payoutNumerators(condition_bytes).call()
+
+            # Get outcome count
+            try:
+                outcome_count = contract.functions.getOutcomeSlotCount(condition_bytes).call()
+            except Exception:
+                outcome_count = len(payout_numerators) if payout_numerators else 2
+
+            # Determine if resolved and winning outcome
+            resolved = False
+            winning_outcome = None
+
+            if payout_numerators and len(payout_numerators) >= 2:
+                # Check if any payout is non-zero (indicates resolution)
+                if any(p > 0 for p in payout_numerators):
+                    resolved = True
+
+                    # For binary markets: index 0 = YES, index 1 = NO
+                    if payout_numerators[0] > payout_numerators[1]:
+                        winning_outcome = "YES"
+                    elif payout_numerators[1] > payout_numerators[0]:
+                        winning_outcome = "NO"
+                    else:
+                        # Equal payouts might indicate a void/cancelled market
+                        winning_outcome = "VOID"
+
+            result = {
+                'condition_id': condition_id,
+                'resolved': resolved,
+                'winning_outcome': winning_outcome,
+                'payout_numerators': [int(p) for p in payout_numerators] if payout_numerators else [],
+                'outcome_count': outcome_count,
+                'source': 'blockchain'
+            }
+
+            if resolved:
+                logger.info(f"Market {condition_id[:10]}... resolved: {winning_outcome}")
+            else:
+                logger.debug(f"Market {condition_id[:10]}... not yet resolved")
+
+            return result
+
+        except Exception as e:
+            logger.debug(f"Blockchain resolution not available for {condition_id[:20]}...: {e}")
+            return {
+                'condition_id': condition_id,
+                'resolved': False,
+                'winning_outcome': None,
+                'payout_numerators': [],
+                'outcome_count': 2,
+                'source': 'unavailable'
+            }
+
+    @staticmethod
+    def infer_resolution_from_prices(outcome_prices, threshold: float = 0.95) -> Optional[Dict]:
+        """
+        Infer market resolution from final outcome prices.
+
+        When a market resolves, the winning outcome's price goes to ~1.0
+        and the losing outcome's price goes to ~0.0.
+
+        Args:
+            outcome_prices: List of price strings like ["0.99", "0.01"]
+                           OR a JSON string like '["0.99", "0.01"]'
+            threshold: Price threshold to consider as "resolved" (default 0.95)
+
+        Returns:
+            Dict with:
+            - resolved: bool
+            - winning_outcome: "YES", "NO", or None
+            - confidence: float (how close to 1.0 the winning price is)
+            - source: "price_inference"
+
+            Returns None if prices are ambiguous
+        """
+        # Handle JSON string input (Polymarket API returns this)
+        if isinstance(outcome_prices, str):
+            try:
+                import json
+                outcome_prices = json.loads(outcome_prices)
+            except (json.JSONDecodeError, TypeError):
+                return None
+
+        if not outcome_prices or len(outcome_prices) < 2:
+            return None
+
+        try:
+            yes_price = float(outcome_prices[0])
+            no_price = float(outcome_prices[1])
+        except (ValueError, TypeError):
+            return None
+
+        # Check if prices indicate resolution
+        if yes_price >= threshold:
+            return {
+                'resolved': True,
+                'winning_outcome': 'YES',
+                'confidence': yes_price,
+                'source': 'price_inference'
+            }
+        elif no_price >= threshold:
+            return {
+                'resolved': True,
+                'winning_outcome': 'NO',
+                'confidence': no_price,
+                'source': 'price_inference'
+            }
+        elif yes_price == 0 and no_price == 0:
+            # Both at 0 - market might be voided or data unavailable
+            return {
+                'resolved': False,
+                'winning_outcome': None,
+                'confidence': 0,
+                'source': 'price_inference'
+            }
+        else:
+            # Prices are ambiguous - market not clearly resolved
+            return {
+                'resolved': False,
+                'winning_outcome': None,
+                'confidence': max(yes_price, no_price),
+                'source': 'price_inference'
+            }
+
+    def get_multiple_resolutions(self, condition_ids: List[str]) -> Dict[str, Dict]:
+        """
+        Get resolution status for multiple markets efficiently.
+
+        Args:
+            condition_ids: List of condition IDs to check
+
+        Returns:
+            Dict mapping condition_id -> resolution data
+        """
+        results = {}
+
+        for cid in condition_ids:
+            try:
+                resolution = self.get_market_resolution(cid)
+                if resolution:
+                    results[cid] = resolution
+            except Exception as e:
+                logger.error(f"Error getting resolution for {cid}: {e}")
+                continue
+
+        resolved_count = sum(1 for r in results.values() if r.get('resolved'))
+        logger.info(f"Checked {len(condition_ids)} markets: {resolved_count} resolved")
+
+        return results
 
 
 def get_blockchain_client() -> BlockchainClient:
