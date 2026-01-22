@@ -95,6 +95,12 @@ class Trade(Base):
     suspicion_score = Column(Integer, index=True)
     alert_level = Column(String(20))  # WATCH, SUSPICIOUS, CRITICAL
 
+    # Trade outcome (populated after market resolves)
+    trade_result = Column(String(10))  # WIN, LOSS, PENDING, VOID
+    profit_loss_usd = Column(Float)
+    hours_before_resolution = Column(Float)
+    resolution_id = Column(Integer, ForeignKey('market_resolutions.id'))
+
     # Verification
     blockchain_verified = Column(Boolean, default=False)
     api_source = Column(String(20))  # data_api, clob_api, blockchain
@@ -119,10 +125,13 @@ class Trade(Base):
         CheckConstraint('bet_size_usd > 0', name='check_bet_size_positive'),
         CheckConstraint("bet_direction IN ('YES', 'NO')", name='check_bet_direction'),
         CheckConstraint('suspicion_score >= 0 AND suspicion_score <= 100', name='check_score_range'),
+        CheckConstraint("trade_result IN ('WIN', 'LOSS', 'PENDING', 'VOID') OR trade_result IS NULL", name='check_trade_result'),
         Index('idx_trades_timestamp_desc', timestamp.desc()),
         Index('idx_trades_suspicion_high', suspicion_score.desc()),
         Index('idx_trades_large_bets', bet_size_usd.desc()),
         Index('idx_trades_wallet_timestamp', wallet_address, timestamp.desc()),
+        Index('idx_trades_result', trade_result),
+        Index('idx_trades_hours_before', hours_before_resolution),
     )
 
     def __repr__(self):
@@ -166,6 +175,16 @@ class WalletMetrics(Base):
     geopolitical_trades = Column(Integer, default=0)
     geopolitical_accuracy = Column(Float)
 
+    # Win tracking (Phase 7)
+    geopolitical_wins = Column(Integer, default=0)
+    geopolitical_losses = Column(Integer, default=0)
+    total_profit_loss_usd = Column(Float, default=0.0)
+    early_win_count = Column(Integer, default=0)  # Wins on bets <48h before resolution
+    win_streak_max = Column(Integer, default=0)
+    win_streak_current = Column(Integer, default=0)
+    suspicious_win_score = Column(Integer)  # 0-100 score for win patterns
+    last_resolution_check = Column(DateTime(timezone=True))
+
     # Metadata
     first_trade_at = Column(DateTime(timezone=True))
     last_trade_at = Column(DateTime(timezone=True))
@@ -179,6 +198,8 @@ class WalletMetrics(Base):
         Index('idx_wallet_metrics_suspicion', suspicion_flags.desc()),
         Index('idx_wallet_metrics_win_rate', win_rate.desc()),
         Index('idx_wallet_metrics_volume', total_volume_usd.desc()),
+        Index('idx_wallet_metrics_suspicious_win', suspicious_win_score.desc()),
+        Index('idx_wallet_metrics_profit', total_profit_loss_usd.desc()),
     )
 
     def __repr__(self):
@@ -237,6 +258,115 @@ class Alert(Base):
 
     def __repr__(self):
         return f"<Alert(id={self.id}, level={self.alert_level}, score={self.suspicion_score})>"
+
+
+class MarketResolution(Base):
+    """
+    Market resolution outcomes tracked from Polymarket
+    """
+    __tablename__ = 'market_resolutions'
+
+    # Primary key
+    id = Column(Integer, primary_key=True, autoincrement=True)
+
+    # Market identification
+    market_id = Column(String(100), ForeignKey('markets.market_id'), nullable=False, unique=True)
+    condition_id = Column(String(66))
+
+    # Resolution data
+    resolved_at = Column(DateTime(timezone=True))
+    winning_outcome = Column(String(10), nullable=False)  # YES, NO, VOID
+
+    # Confidence & source
+    confidence = Column(Float, nullable=False)  # 0.0 to 1.0
+    resolution_source = Column(String(20), nullable=False)  # price_inference, blockchain, manual
+
+    # Raw data for audit
+    final_yes_price = Column(Float)
+    final_no_price = Column(Float)
+    payout_numerators = Column(JSON)  # From blockchain if available
+
+    # Metadata
+    created_at = Column(
+        DateTime(timezone=True),
+        default=lambda: datetime.now(timezone.utc),
+        nullable=False
+    )
+    updated_at = Column(
+        DateTime(timezone=True),
+        default=lambda: datetime.now(timezone.utc),
+        onupdate=lambda: datetime.now(timezone.utc)
+    )
+
+    # Relationships
+    market = relationship("Market")
+    win_history_entries = relationship("WalletWinHistory", back_populates="resolution")
+
+    # Constraints
+    __table_args__ = (
+        CheckConstraint("winning_outcome IN ('YES', 'NO', 'VOID')", name='chk_winning_outcome'),
+        CheckConstraint('confidence >= 0 AND confidence <= 1', name='chk_confidence'),
+        Index('idx_resolutions_market', market_id),
+        Index('idx_resolutions_resolved_at', resolved_at.desc()),
+        Index('idx_resolutions_outcome', winning_outcome),
+    )
+
+    def __repr__(self):
+        return f"<MarketResolution(market={self.market_id[:20]}..., outcome={self.winning_outcome})>"
+
+
+class WalletWinHistory(Base):
+    """
+    Individual trade outcomes after market resolution
+    """
+    __tablename__ = 'wallet_win_history'
+
+    # Primary key
+    id = Column(Integer, primary_key=True, autoincrement=True)
+
+    # Relationships
+    wallet_address = Column(String(42), nullable=False, index=True)
+    market_id = Column(String(100), nullable=False)
+    trade_id = Column(Integer, ForeignKey('trades.id'), index=True)
+    resolution_id = Column(Integer, ForeignKey('market_resolutions.id'), index=True)
+
+    # Trade details (denormalized for query performance)
+    bet_direction = Column(String(3), nullable=False)  # YES/NO
+    bet_size_usd = Column(Float, nullable=False)
+    bet_price = Column(Float, nullable=False)
+
+    # Resolution details
+    winning_outcome = Column(String(10), nullable=False)
+    trade_result = Column(String(10), nullable=False)  # WIN, LOSS, VOID
+    profit_loss_usd = Column(Float)
+    hours_before_resolution = Column(Float)
+
+    # Context
+    is_geopolitical = Column(Boolean, default=False)
+    suspicion_score_at_bet = Column(Integer)
+    market_title = Column(Text)
+
+    # Metadata
+    created_at = Column(
+        DateTime(timezone=True),
+        default=lambda: datetime.now(timezone.utc),
+        nullable=False
+    )
+
+    # Relationships
+    resolution = relationship("MarketResolution", back_populates="win_history_entries")
+
+    # Constraints
+    __table_args__ = (
+        CheckConstraint("trade_result IN ('WIN', 'LOSS', 'VOID')", name='chk_win_result'),
+        Index('idx_win_history_wallet', wallet_address),
+        Index('idx_win_history_result', wallet_address, trade_result),
+        Index('idx_win_history_hours', hours_before_resolution),
+        Index('idx_win_history_geopolitical', is_geopolitical, trade_result),
+    )
+
+    def __repr__(self):
+        return f"<WalletWinHistory(wallet={self.wallet_address[:10]}..., result={self.trade_result}, pnl=${self.profit_loss_usd})>"
 
 
 class PizzINTData(Base):

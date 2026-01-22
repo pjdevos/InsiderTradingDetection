@@ -1,7 +1,16 @@
 """
 Database models and operations module
 """
-from database.models import Base, Trade, Market, WalletMetrics, Alert, PizzINTData
+from database.models import (
+    Base,
+    Trade,
+    Market,
+    WalletMetrics,
+    Alert,
+    PizzINTData,
+    MarketResolution,
+    WalletWinHistory
+)
 from database.connection import (
     init_db,
     get_db_session,
@@ -25,6 +34,8 @@ __all__ = [
     'WalletMetrics',
     'Alert',
     'PizzINTData',
+    'MarketResolution',
+    'WalletWinHistory',
     # Connection
     'init_db',
     'get_db_session',

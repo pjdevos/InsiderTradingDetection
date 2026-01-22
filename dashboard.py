@@ -17,12 +17,13 @@ from datetime import datetime, timedelta, timezone
 from sqlalchemy import func, desc, extract, cast, Integer
 
 from database.connection import init_db, get_db_session
-from database.models import Trade, WalletMetrics
+from database.models import Trade, WalletMetrics, MarketResolution, WalletWinHistory
 from analysis.patterns import (
     analyze_wallet,
     find_repeat_offenders,
     find_suspicious_networks
 )
+from analysis.win_scoring import SuspiciousWinScorer, WIN_ALERT_THRESHOLDS
 from config import config
 
 
@@ -50,6 +51,7 @@ def main():
         [
             "🏠 Overview",
             "🚨 Alert Feed",
+            "🏆 Suspicious Winners",
             "📊 Trade History",
             "👤 Wallet Analysis",
             "🕸️ Network Patterns",
@@ -78,6 +80,8 @@ def main():
         show_overview()
     elif page == "🚨 Alert Feed":
         show_alerts()
+    elif page == "🏆 Suspicious Winners":
+        show_suspicious_winners()
     elif page == "📊 Trade History":
         show_trade_history()
     elif page == "👤 Wallet Analysis":
@@ -417,6 +421,215 @@ def show_wallet_analysis():
                     st.metric("Expected", f"{anomaly['baseline_win_rate']:.1%}")
                 with col3:
                     st.metric("Anomaly Score", f"{anomaly['anomaly_score']:.1f}/100")
+
+
+def show_suspicious_winners():
+    """Suspicious winners page - wallets with abnormal win patterns"""
+    st.title("🏆 Suspicious Winners")
+
+    st.markdown("""
+    This page shows wallets with abnormally high win rates on prediction markets.
+    A high win score suggests potential insider knowledge.
+    """)
+
+    with get_db_session() as session:
+        # Check if we have resolution data
+        resolution_count = session.query(func.count(MarketResolution.id)).scalar() or 0
+        win_history_count = session.query(func.count(WalletWinHistory.id)).scalar() or 0
+
+        if resolution_count == 0:
+            st.warning(
+                "No market resolutions tracked yet. "
+                "Run the resolution monitor to detect market outcomes."
+            )
+            st.info(
+                "Market resolutions are inferred from price data when markets close. "
+                "The system detects when winning outcome price approaches ~1.0."
+            )
+
+            # Show explanation
+            with st.expander("How Suspicious Win Detection Works"):
+                st.markdown("""
+                **Step 1: Resolution Detection**
+                - Monitor Polymarket for closed markets
+                - Infer outcomes from final prices (winner → ~1.0)
+
+                **Step 2: Win/Loss Calculation**
+                - Match trades to market resolutions
+                - Calculate profit/loss for each trade
+
+                **Step 3: Suspicious Win Scoring**
+                - Analyze win patterns per wallet
+                - Factors: Win rate, timing, geopolitical focus
+                - Score from 0-100
+
+                **Alert Thresholds:**
+                - 🏆 WATCH_WIN: 50+ points
+                - 💰 SUSPICIOUS_WIN: 70+ points
+                - 🎯 CRITICAL_WIN: 85+ points
+                """)
+            return
+
+        # Stats row
+        col1, col2, col3, col4 = st.columns(4)
+
+        with col1:
+            st.metric("Resolved Markets", resolution_count)
+
+        with col2:
+            st.metric("Trade Outcomes", win_history_count)
+
+        with col3:
+            # Wallets with high win scores
+            suspicious_count = session.query(func.count(WalletMetrics.wallet_address)).filter(
+                WalletMetrics.suspicious_win_score >= WIN_ALERT_THRESHOLDS['WATCH_WIN']
+            ).scalar() or 0
+            st.metric("Suspicious Wallets", suspicious_count)
+
+        with col4:
+            # Average win rate
+            avg_win_rate = session.query(func.avg(WalletMetrics.win_rate)).filter(
+                WalletMetrics.win_rate.isnot(None)
+            ).scalar() or 0
+            st.metric("Avg Win Rate", f"{avg_win_rate:.1%}" if avg_win_rate else "N/A")
+
+        st.markdown("---")
+
+        # Filter options
+        col1, col2 = st.columns(2)
+
+        with col1:
+            min_score = st.slider(
+                "Minimum Win Score",
+                min_value=0,
+                max_value=100,
+                value=WIN_ALERT_THRESHOLDS['WATCH_WIN']
+            )
+
+        with col2:
+            min_trades = st.number_input(
+                "Minimum Resolved Trades",
+                min_value=1,
+                max_value=50,
+                value=5
+            )
+
+        # Get suspicious wallets
+        wallets = session.query(WalletMetrics).filter(
+            WalletMetrics.suspicious_win_score >= min_score,
+            WalletMetrics.winning_trades + WalletMetrics.losing_trades >= min_trades
+        ).order_by(
+            desc(WalletMetrics.suspicious_win_score)
+        ).limit(50).all()
+
+        if wallets:
+            st.subheader(f"🎯 Top Suspicious Winners ({len(wallets)} found)")
+
+            # Create dataframe
+            df_data = []
+            for w in wallets:
+                total_resolved = (w.winning_trades or 0) + (w.losing_trades or 0)
+                win_rate = w.win_rate or 0
+
+                # Determine alert level
+                score = w.suspicious_win_score or 0
+                if score >= WIN_ALERT_THRESHOLDS['CRITICAL_WIN']:
+                    alert_level = "🎯 CRITICAL"
+                elif score >= WIN_ALERT_THRESHOLDS['SUSPICIOUS_WIN']:
+                    alert_level = "💰 SUSPICIOUS"
+                elif score >= WIN_ALERT_THRESHOLDS['WATCH_WIN']:
+                    alert_level = "🏆 WATCH"
+                else:
+                    alert_level = "-"
+
+                df_data.append({
+                    'Alert': alert_level,
+                    'Wallet': f"{w.wallet_address[:10]}...{w.wallet_address[-6:]}",
+                    'Win Score': score,
+                    'Win Rate': f"{win_rate:.1%}",
+                    'Wins': w.winning_trades or 0,
+                    'Losses': w.losing_trades or 0,
+                    'Total P&L': f"${w.total_profit_loss_usd or 0:,.2f}",
+                    'Geo Wins': w.geopolitical_wins or 0,
+                    'Geo Acc': f"{w.geopolitical_accuracy:.1%}" if w.geopolitical_accuracy else "N/A"
+                })
+
+            df = pd.DataFrame(df_data)
+            st.dataframe(df, use_container_width=True, hide_index=True)
+
+            # Detail view for selected wallet
+            st.markdown("---")
+            st.subheader("📋 Wallet Details")
+
+            wallet_options = [f"{w.wallet_address[:10]}...{w.wallet_address[-6:]}" for w in wallets]
+            selected_idx = st.selectbox("Select wallet for details", range(len(wallet_options)),
+                                        format_func=lambda i: wallet_options[i])
+
+            if selected_idx is not None:
+                selected_wallet = wallets[selected_idx]
+
+                col1, col2 = st.columns(2)
+
+                with col1:
+                    st.markdown("**Performance Stats:**")
+                    st.write(f"- Win Rate: {selected_wallet.win_rate:.1%}" if selected_wallet.win_rate else "- Win Rate: N/A")
+                    st.write(f"- Wins: {selected_wallet.winning_trades or 0}")
+                    st.write(f"- Losses: {selected_wallet.losing_trades or 0}")
+                    st.write(f"- Total P&L: ${selected_wallet.total_profit_loss_usd or 0:,.2f}")
+                    st.write(f"- Max Win Streak: {selected_wallet.win_streak_max or 0}")
+
+                with col2:
+                    st.markdown("**Geopolitical Focus:**")
+                    st.write(f"- Geo Trades: {selected_wallet.geopolitical_trades or 0}")
+                    st.write(f"- Geo Wins: {selected_wallet.geopolitical_wins or 0}")
+                    st.write(f"- Geo Accuracy: {selected_wallet.geopolitical_accuracy:.1%}" if selected_wallet.geopolitical_accuracy else "- Geo Accuracy: N/A")
+                    st.write(f"- Early Wins (<48h): {selected_wallet.early_win_count or 0}")
+
+                # Win history for this wallet
+                st.markdown("**Recent Win History:**")
+                history = session.query(WalletWinHistory).filter(
+                    WalletWinHistory.wallet_address == selected_wallet.wallet_address
+                ).order_by(
+                    desc(WalletWinHistory.created_at)
+                ).limit(20).all()
+
+                if history:
+                    history_data = [{
+                        'Result': '✅ WIN' if h.trade_result == 'WIN' else '❌ LOSS',
+                        'Market': (h.market_title or '')[:40] + '...' if h.market_title and len(h.market_title) > 40 else (h.market_title or 'Unknown'),
+                        'Bet': f"${h.bet_size_usd:,.2f}",
+                        'Direction': h.bet_direction,
+                        'P&L': f"${h.profit_loss_usd or 0:,.2f}",
+                        'Timing': f"{h.hours_before_resolution:.1f}h" if h.hours_before_resolution else "N/A",
+                        'Geo': '🌍' if h.is_geopolitical else ''
+                    } for h in history]
+
+                    st.dataframe(pd.DataFrame(history_data), use_container_width=True, hide_index=True)
+                else:
+                    st.info("No win history records for this wallet.")
+        else:
+            st.info(f"No wallets found with win score >= {min_score} and >= {min_trades} resolved trades.")
+
+        # Recent resolutions
+        st.markdown("---")
+        st.subheader("📅 Recent Market Resolutions")
+
+        resolutions = session.query(MarketResolution).order_by(
+            desc(MarketResolution.resolved_at)
+        ).limit(10).all()
+
+        if resolutions:
+            res_data = [{
+                'Outcome': f"{'✅ YES' if r.winning_outcome == 'YES' else '❌ NO' if r.winning_outcome == 'NO' else '⚪ VOID'}",
+                'Market ID': f"{r.market_id[:20]}...",
+                'Confidence': f"{r.confidence:.1%}",
+                'Resolved': r.resolved_at.strftime('%Y-%m-%d %H:%M') if r.resolved_at else 'N/A',
+                'Source': r.resolution_source
+            } for r in resolutions]
+
+            st.dataframe(pd.DataFrame(res_data), use_container_width=True, hide_index=True)
+        else:
+            st.info("No market resolutions yet.")
 
 
 def show_network_patterns():

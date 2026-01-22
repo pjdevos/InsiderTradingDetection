@@ -20,7 +20,10 @@ def get_alert_emoji(alert_level: str) -> str:
     emojis = {
         'WATCH': '👀',
         'SUSPICIOUS': '⚠️',
-        'CRITICAL': '🚨'
+        'CRITICAL': '🚨',
+        'WATCH_WIN': '🏆',
+        'SUSPICIOUS_WIN': '💰',
+        'CRITICAL_WIN': '🎯'
     }
     return emojis.get(alert_level, '📊')
 
@@ -279,6 +282,195 @@ def email_alert_html(trade_data: Dict, scoring_result: Dict) -> str:
             """
 
     html += """
+                </div>
+            </div>
+            <div class="footer">
+                <p>Geopolitical Insider Trading Detection System</p>
+                <p>This is an automated alert. Do not reply to this email.</p>
+            </div>
+        </div>
+    </body>
+    </html>
+    """
+
+    return html
+
+
+def telegram_win_alert_message(wallet_address: str, scoring_result: Dict) -> str:
+    """
+    Create Telegram alert message for suspicious winner
+
+    Args:
+        wallet_address: Wallet address
+        scoring_result: Win scoring results from SuspiciousWinScorer
+
+    Returns:
+        Formatted message string
+    """
+    alert_level = scoring_result.get('alert_level', 'WATCH_WIN')
+    score = scoring_result.get('total_score', 0)
+    breakdown = scoring_result.get('breakdown', {})
+    stats = scoring_result.get('stats', {})
+
+    emoji = get_alert_emoji(alert_level)
+
+    # Build message
+    message = f"{emoji} *{alert_level.replace('_', ' ')}* {emoji}\n\n"
+    message += f"*Suspicious Win Pattern Detected*\n\n"
+    message += f"*Win Score:* {score}/100\n\n"
+
+    message += f"*Wallet:*\n"
+    message += f"`{wallet_address[:10]}...{wallet_address[-6:]}`\n\n"
+
+    # Stats
+    message += f"*Performance Stats:*\n"
+    win_rate = stats.get('win_rate', 0)
+    message += f"• Win Rate: {format_percentage(win_rate)}\n"
+    message += f"• Wins: {stats.get('wins', 0)} / Losses: {stats.get('losses', 0)}\n"
+    message += f"• Total P&L: {format_currency(stats.get('total_profit_loss', 0))}\n"
+
+    geo_win_rate = stats.get('geo_win_rate', 0)
+    if stats.get('geo_trades', 0) > 0:
+        message += f"• Geo Win Rate: {format_percentage(geo_win_rate)} ({stats.get('geo_wins', 0)}/{stats.get('geo_trades', 0)})\n"
+
+    avg_hours = stats.get('avg_hours_before_resolution', 0)
+    if avg_hours > 0:
+        message += f"• Avg. Bet Timing: {avg_hours:.1f}h before resolution\n"
+
+    message += "\n"
+
+    # Add top scoring factors
+    message += f"*Key Factors:*\n"
+    top_factors = sorted(
+        [(name, data) for name, data in breakdown.items() if data.get('score', 0) > 0],
+        key=lambda x: x[1].get('score', 0),
+        reverse=True
+    )[:3]
+
+    for factor_name, factor_data in top_factors:
+        score_val = factor_data.get('score', 0)
+        max_val = factor_data.get('max', 0)
+        reason = factor_data.get('reason', '')
+        message += f"• {factor_name.replace('_', ' ').title()}: {score_val}/{max_val}\n"
+        message += f"  _{reason}_\n"
+
+    message += f"\n⚠️ This wallet shows patterns consistent with insider trading.\n"
+
+    return message
+
+
+def email_win_alert_html(wallet_address: str, scoring_result: Dict) -> str:
+    """
+    Create HTML email for suspicious winner alert
+
+    Args:
+        wallet_address: Wallet address
+        scoring_result: Win scoring results
+
+    Returns:
+        HTML email content
+    """
+    alert_level = scoring_result.get('alert_level', 'WATCH_WIN')
+    score = scoring_result.get('total_score', 0)
+    breakdown = scoring_result.get('breakdown', {})
+    stats = scoring_result.get('stats', {})
+
+    # Alert level colors
+    colors = {
+        'WATCH_WIN': '#FFD700',
+        'SUSPICIOUS_WIN': '#FF8C00',
+        'CRITICAL_WIN': '#DC143C'
+    }
+    alert_color = colors.get(alert_level, '#666666')
+
+    win_rate = stats.get('win_rate', 0)
+    total_pnl = stats.get('total_profit_loss', 0)
+    geo_win_rate = stats.get('geo_win_rate', 0)
+
+    html = f"""
+    <!DOCTYPE html>
+    <html>
+    <head>
+        <style>
+            body {{ font-family: Arial, sans-serif; line-height: 1.6; color: #333; }}
+            .container {{ max-width: 600px; margin: 0 auto; padding: 20px; }}
+            .header {{ background-color: {alert_color}; color: white; padding: 20px; text-align: center; border-radius: 5px 5px 0 0; }}
+            .content {{ background-color: #f9f9f9; padding: 20px; border: 1px solid #ddd; border-radius: 0 0 5px 5px; }}
+            .score {{ font-size: 36px; font-weight: bold; text-align: center; margin: 20px 0; color: {alert_color}; }}
+            .detail {{ margin: 10px 0; padding: 10px; background-color: white; border-left: 3px solid {alert_color}; }}
+            .detail-label {{ font-weight: bold; color: #666; }}
+            .stats {{ display: flex; flex-wrap: wrap; gap: 10px; margin: 15px 0; }}
+            .stat-box {{ flex: 1; min-width: 120px; padding: 15px; background: white; text-align: center; border-radius: 5px; }}
+            .stat-value {{ font-size: 24px; font-weight: bold; color: {alert_color}; }}
+            .stat-label {{ font-size: 12px; color: #666; }}
+            .factors {{ margin-top: 20px; }}
+            .factor {{ margin: 10px 0; padding: 10px; background-color: #fff; }}
+            .footer {{ text-align: center; margin-top: 20px; padding: 10px; color: #666; font-size: 12px; }}
+        </style>
+    </head>
+    <body>
+        <div class="container">
+            <div class="header">
+                <h1>🎯 {alert_level.replace('_', ' ')}</h1>
+                <p>Suspicious Winner Pattern Detected</p>
+            </div>
+            <div class="content">
+                <div class="score">Win Score: {score}/100</div>
+
+                <h2>Wallet</h2>
+                <div class="detail">
+                    <code>{wallet_address}</code>
+                </div>
+
+                <h2>Performance Statistics</h2>
+                <div class="stats">
+                    <div class="stat-box">
+                        <div class="stat-value">{win_rate:.1%}</div>
+                        <div class="stat-label">Win Rate</div>
+                    </div>
+                    <div class="stat-box">
+                        <div class="stat-value">{stats.get('wins', 0)}</div>
+                        <div class="stat-label">Wins</div>
+                    </div>
+                    <div class="stat-box">
+                        <div class="stat-value">{stats.get('losses', 0)}</div>
+                        <div class="stat-label">Losses</div>
+                    </div>
+                    <div class="stat-box">
+                        <div class="stat-value">{format_currency(total_pnl)}</div>
+                        <div class="stat-label">Total P&L</div>
+                    </div>
+                </div>
+
+                <div class="detail">
+                    <span class="detail-label">Geopolitical Win Rate:</span> {geo_win_rate:.1%}
+                </div>
+                <div class="detail">
+                    <span class="detail-label">Avg. Timing:</span> {stats.get('avg_hours_before_resolution', 0):.1f}h before resolution
+                </div>
+
+                <div class="factors">
+                    <h2>Suspicion Factors</h2>
+    """
+
+    # Add scoring factors
+    for factor_name, factor_data in breakdown.items():
+        if factor_data.get('score', 0) > 0:
+            html += f"""
+                    <div class="factor">
+                        <strong>{factor_name.replace('_', ' ').title()}:</strong>
+                        {factor_data.get('score', 0)}/{factor_data.get('max', 0)}<br>
+                        <em>{factor_data.get('reason', '')}</em>
+                    </div>
+            """
+
+    html += """
+                </div>
+
+                <div class="detail" style="margin-top: 20px; background-color: #fff3cd; border-color: #856404;">
+                    <strong>⚠️ Warning:</strong> This wallet shows trading patterns consistent with insider knowledge.
+                    The combination of high win rate, strategic timing, and focus on geopolitical markets suggests
+                    potential access to non-public information.
                 </div>
             </div>
             <div class="footer">

@@ -15,7 +15,8 @@ from alerts.templates import (
     telegram_welcome_message,
     telegram_status_message,
     telegram_help_message,
-    telegram_summary_message
+    telegram_summary_message,
+    telegram_win_alert_message
 )
 from database.storage import DataStorageService
 
@@ -257,6 +258,96 @@ class TelegramAlertBot:
             logger.error(f"Error sending summary: {e}")
             return False
 
+    async def send_win_alert(
+        self,
+        wallet_address: str,
+        scoring_result: Dict,
+        chat_id: str = None
+    ) -> bool:
+        """
+        Send alert message for suspicious winner
+
+        Args:
+            wallet_address: Wallet address
+            scoring_result: Win scoring results
+            chat_id: Optional chat ID (uses default if not provided)
+
+        Returns:
+            True if sent successfully
+        """
+        if not self.is_configured():
+            logger.warning("Telegram bot not configured, cannot send win alert")
+            return False
+
+        target_chat_id = chat_id or self.chat_id
+
+        if not target_chat_id or 'your' in target_chat_id.lower():
+            logger.warning("No valid chat ID configured")
+            return False
+
+        try:
+            # Generate win alert message
+            message = telegram_win_alert_message(wallet_address, scoring_result)
+
+            # Send message
+            await self.bot.send_message(
+                chat_id=target_chat_id,
+                text=message,
+                parse_mode=ParseMode.MARKDOWN,
+                disable_web_page_preview=True
+            )
+
+            logger.info(
+                f"Sent {scoring_result.get('alert_level', 'UNKNOWN')} win alert to chat {target_chat_id}"
+            )
+            return True
+
+        except TelegramError as e:
+            logger.error(f"Telegram error sending win alert: {e}")
+            return False
+        except Exception as e:
+            logger.error(f"Error sending win alert: {e}")
+            return False
+
+    def send_win_alert_sync(
+        self,
+        wallet_address: str,
+        scoring_result: Dict,
+        chat_id: str = None
+    ) -> bool:
+        """
+        Synchronous wrapper for send_win_alert
+
+        Args:
+            wallet_address: Wallet address
+            scoring_result: Win scoring results
+            chat_id: Optional chat ID
+
+        Returns:
+            True if sent successfully
+        """
+        if not self.is_configured():
+            return False
+
+        try:
+            import asyncio
+
+            # Get or create event loop
+            try:
+                loop = asyncio.get_event_loop()
+            except RuntimeError:
+                loop = asyncio.new_event_loop()
+                asyncio.set_event_loop(loop)
+
+            # Run async function
+            return loop.run_until_complete(
+                self.send_win_alert(wallet_address, scoring_result, chat_id)
+            )
+
+        except Exception as e:
+            logger.error(f"Error in send_win_alert_sync: {e}")
+            return False
+
     def run_bot(self):
         """
         Run bot in polling mode (for testing/interactive use)
@@ -404,6 +495,47 @@ def send_trade_alert(
     # Send alert
     bot = get_telegram_bot()
     success = bot.send_alert_sync(trade_data, scoring_result)
+
+    # Record alert if sent successfully and respecting rate limits
+    if success and respect_rate_limit:
+        rate_limiter.record_alert()
+
+    return success
+
+
+def send_win_alert(
+    wallet_address: str,
+    scoring_result: Dict,
+    respect_rate_limit: bool = True
+) -> bool:
+    """
+    Convenience function to send suspicious winner alert
+
+    Args:
+        wallet_address: Wallet address
+        scoring_result: Win scoring results from SuspiciousWinScorer
+        respect_rate_limit: Whether to respect rate limits
+
+    Returns:
+        True if sent successfully
+    """
+    alert_level = scoring_result.get('alert_level')
+
+    if not alert_level:
+        return False
+
+    # Get rate limiter
+    rate_limiter = get_rate_limiter()
+
+    # Check rate limit (CRITICAL_WIN always goes through)
+    if respect_rate_limit and alert_level != 'CRITICAL_WIN':
+        if not rate_limiter.should_send_alert(alert_level):
+            logger.info(f"Win alert suppressed due to rate limit: {alert_level}")
+            return False
+
+    # Send alert
+    bot = get_telegram_bot()
+    success = bot.send_win_alert_sync(wallet_address, scoring_result)
 
     # Record alert if sent successfully and respecting rate limits
     if success and respect_rate_limit:

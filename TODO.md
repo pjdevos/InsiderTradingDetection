@@ -1,8 +1,10 @@
 # TODO - Geopolitical Insider Trading Detection System
 
-**Last Updated:** January 14, 2026
-**Current Phase:** Phase 6 In Progress (Web Dashboard)
-**Next Milestone:** Complete Dashboard & Fix Remaining Issues
+**Last Updated:** January 21, 2026
+**Current Phase:** Phase 7 Planning (Suspicious Wins Detection)
+**Next Milestone:** Implement Win/Loss Tracking & Suspicious Win Scoring
+**Repository:** https://github.com/pjdevos/InsiderTradingDetection
+**Deployment:** Railway (Dashboard + Monitor running)
 
 ---
 
@@ -220,7 +222,7 @@
 
 ---
 
-## Phase 6: Web Dashboard 🔄 IN PROGRESS
+## Phase 6: Web Dashboard & Deployment ✅ COMPLETE
 
 ### Core Features
 
@@ -232,7 +234,6 @@
 - [x] ✅ Wallet Analysis page
 - [x] ✅ Statistics page
 - [x] ✅ Settings page
-- [ ] Network Patterns page (placeholder)
 
 ### Visualizations
 
@@ -240,9 +241,6 @@
 - [x] ✅ Score distribution histogram
 - [x] ✅ Daily activity timeline
 - [x] ✅ Alert level pie chart
-- [ ] Scatter plot: bet size vs suspicion score
-- [ ] Heatmap: trading activity by hour/day
-- [ ] Network graph: wallet relationships
 
 ### Features
 
@@ -250,9 +248,17 @@
 - [x] ✅ Sorting options
 - [x] ✅ Pagination for large datasets
 - [x] ✅ Search functionality
-- [ ] Export data (CSV, JSON)
-- [ ] Dark mode
-- [ ] Authentication/authorization
+
+### Railway Deployment (Jan 16, 2026)
+
+- [x] ✅ Created Dockerfile for production
+- [x] ✅ Created Railway configuration (railway.toml, railway.json, Procfile)
+- [x] ✅ Added PostgreSQL database connection
+- [x] ✅ Added DNS retry logic for Railway private networking
+- [x] ✅ Fixed null market_id validation
+- [x] ✅ Added psycopg2-binary to requirements.txt
+- [x] ✅ Pushed code to GitHub repository
+- [x] ✅ Dashboard and monitor services deployed
 
 ### Code Quality Fixes Applied (Jan 14, 2026)
 
@@ -264,19 +270,103 @@
 - [x] ✅ Replaced inefficient queries with SQL aggregations
 - [x] ✅ Added pagination to alerts page
 - [x] ✅ Fixed timestamp conversion (int → datetime)
-- [x] ✅ Added blacklist for sports/esports false positives (Counter-Strike, etc.)
+- [x] ✅ Added blacklist for sports/esports false positives
 - [x] ✅ Added word boundary matching for short keywords
-- [x] ✅ Fixed API field mappings in storage:
-  - [x] `transactionHash` → `transaction_hash` (camelCase support)
-  - [x] `conditionId` → `market_id` (API uses conditionId)
-  - [x] `proxyWallet` → `wallet_address` (API uses proxyWallet)
-  - [x] `size` → `bet_size_usd` (API uses size field)
+- [x] ✅ Fixed API field mappings in storage
 - [x] ✅ Added bet direction normalization (Yes/No/Up/Down → YES/NO)
 - [x] ✅ Improved IntegrityError logging for debugging
 
+### Future Enhancements (Nice to Have)
+
+- [ ] Network Patterns page
+- [ ] Scatter plot: bet size vs suspicion score
+- [ ] Heatmap: trading activity by hour/day
+- [ ] Network graph: wallet relationships
+- [ ] Export data (CSV, JSON)
+- [ ] Dark mode
+- [ ] Authentication/authorization
+
 ---
 
-## Phase 7: Validation & Deployment (Future)
+## Phase 7: Suspicious Wins Detection 🔄 PLANNING
+
+**Technical Specification:** `docs/SUSPICIOUS_WINS_SPEC.md` (660 lines)
+
+### Completed (Resolution Detection Prep)
+
+- [x] ✅ Created technical specification document
+- [x] ✅ Added `infer_resolution_from_prices()` to BlockchainClient
+- [x] ✅ Fixed JSON string parsing for API responses
+- [x] ✅ Tested price inference with live Polymarket data
+- [x] ✅ Confirmed blockchain queries don't work (using price inference instead)
+
+### Database Schema Changes
+
+- [ ] Create `market_resolutions` table
+  - [ ] market_id, resolved_at, winning_outcome, outcome_prices
+  - [ ] resolution_source (API vs blockchain)
+- [ ] Create `wallet_win_history` table
+  - [ ] trade_id, wallet_address, market_id
+  - [ ] won (boolean), profit_loss_usd, payout_usd
+  - [ ] resolution_delay_hours
+- [ ] Add win tracking fields to `wallet_metrics`
+  - [ ] total_wins, total_losses, win_rate
+  - [ ] geopolitical_wins, geopolitical_win_rate
+  - [ ] avg_profit_per_win, largest_win
+- [ ] Create Alembic migration
+
+### Market Resolution Monitoring
+
+- [ ] Create `ResolutionMonitor` class
+  - [ ] Poll Polymarket API for resolved markets
+  - [ ] Use price inference (winner price → ~1.0)
+  - [ ] Handle partial resolutions
+- [ ] Create `ResolutionStorage` service
+  - [ ] Store resolutions to database
+  - [ ] Avoid duplicate processing
+- [ ] Schedule polling (every 5 minutes)
+
+### Win/Loss Calculation
+
+- [ ] Create `WinLossCalculator` class
+  - [ ] Match trades to resolved markets
+  - [ ] Calculate win/loss per trade
+  - [ ] Calculate profit/loss in USD
+- [ ] Update wallet metrics after resolution
+- [ ] Track win streaks
+
+### Suspicious Win Scoring
+
+- [ ] Create `SuspiciousWinScorer` class
+- [ ] Implement scoring factors:
+  - [ ] Overall win rate (suspicious if >70%)
+  - [ ] Geopolitical win rate (suspicious if >75%)
+  - [ ] Profit concentration (few big wins)
+  - [ ] Win streak patterns
+  - [ ] Pre-event timing (bet close to resolution)
+  - [ ] Bet size on winning trades
+- [ ] Define alert levels:
+  - [ ] WATCH_WIN (60-74 points)
+  - [ ] SUSPICIOUS_WIN (75-89 points)
+  - [ ] CRITICAL_WIN (90-100 points)
+
+### Integration
+
+- [ ] Add win alerts to Telegram bot
+- [ ] Add win alerts to email system
+- [ ] Create dashboard page for suspicious winners
+- [ ] Add "Top Winners" leaderboard
+
+### Testing
+
+- [ ] Unit tests for resolution detection
+- [ ] Unit tests for win/loss calculation
+- [ ] Unit tests for suspicious win scoring
+- [ ] Integration test with live data
+
+---
+
+## Phase 8: Validation & Optimization (Future)
 
 - [ ] Collect historical data for backtesting
 - [ ] Backtest prediction accuracy
@@ -288,7 +378,6 @@
 - [ ] Performance optimization
 - [ ] Security audit
 - [ ] Documentation review
-- [ ] Deployment planning
 - [ ] Monitoring setup
 - [ ] Backup strategy
 
@@ -390,20 +479,20 @@
 
 ### Development
 
-- [x] Virtual environment setup
-- [x] Dependencies managed (requirements.txt)
-- [x] Git repository initialized
-- [x] SQLite database for development
-- [ ] Docker containerization
-- [ ] Docker Compose for services
+- [x] ✅ Virtual environment setup
+- [x] ✅ Dependencies managed (requirements.txt)
+- [x] ✅ Git repository initialized
+- [x] ✅ SQLite database for development
+- [x] ✅ Docker containerization (Dockerfile)
 
-### Production
+### Production (Railway) ✅
 
-- [ ] PostgreSQL setup
-- [ ] Production configuration
-- [ ] Environment variables management
-- [ ] Secrets management
-- [ ] Logging configuration
+- [x] ✅ PostgreSQL setup (Railway managed)
+- [x] ✅ Production configuration (railway.toml, railway.json)
+- [x] ✅ Environment variables management (Railway secrets)
+- [x] ✅ Secrets management (Railway)
+- [x] ✅ Logging configuration
+- [x] ✅ GitHub repository: https://github.com/pjdevos/InsiderTradingDetection
 - [ ] Monitoring setup (Prometheus/Grafana?)
 - [ ] Error tracking (Sentry?)
 - [ ] Backup strategy
@@ -411,11 +500,12 @@
 
 ### CI/CD
 
+- [x] ✅ GitHub repository connected
+- [x] ✅ Railway auto-deploy on push
 - [ ] GitHub Actions workflow
 - [ ] Automated testing on commit
 - [ ] Code quality checks (pylint, black)
 - [ ] Security scanning
-- [ ] Automated deployment
 
 ---
 
@@ -462,25 +552,29 @@
 
 ## Known Issues & Bugs
 
-### Current Issues (Jan 14, 2026)
+### Current Issues (Jan 21, 2026)
 
-1. **Geopolitical Trade Storage** (High Priority) 🔥
-   - Monitor detects trades correctly
-   - Timestamp conversion fixed
-   - Some geopolitical trades still not being stored
-   - Need to debug process_trade() flow
-
-2. **Test Keyword Mismatch** (Low Priority)
-   - Test expects 'government' in keywords but it was removed
-   - 39/40 tests passing
-
-3. **Dashboard Deprecation Warning** (Low Priority)
+1. **Dashboard Deprecation Warning** (Low Priority)
    - Streamlit `use_container_width` deprecated
    - Will be removed after 2025-12-31
    - Needs migration to `width='stretch'`
 
-### Resolved Issues (Jan 14, 2026) ✅
+2. **Blockchain Query Limitations** (Info)
+   - Conditional Tokens contract queries fail for Polymarket
+   - Using price inference as workaround (works well)
 
+### Resolved Issues ✅
+
+**Jan 19, 2026 (Resolution Detection):**
+1. ~~JSON string parsing in price inference~~ → Added JSON.loads() for API response
+
+**Jan 16, 2026 (Railway Deployment):**
+1. ~~Railway DNS resolution delays~~ → Added retry logic with exponential backoff
+2. ~~Missing psycopg2~~ → Added psycopg2-binary to requirements.txt
+3. ~~Build failures~~ → Created custom Dockerfile
+4. ~~Null market_id errors~~ → Added validation to skip invalid markets
+
+**Jan 14, 2026 (Code Quality):**
 1. ~~SQL injection in dashboard search~~ → Fixed with escape characters
 2. ~~Missing input validation in blockchain~~ → Added `_validate_address()`, `_validate_tx_hash()`
 3. ~~Blockchain scanning resource exhaustion~~ → Added limits, reduced API calls from ~130 to ~6
@@ -491,7 +585,6 @@
 
 ### Future Considerations
 
-- SQLite limitations for production (switch to PostgreSQL)
 - JSON columns not ideal for complex queries (consider separate tables)
 - No caching layer (consider Redis for market data)
 - No queue system for async processing (consider Celery/RabbitMQ)
@@ -500,23 +593,28 @@
 
 ## Immediate Next Steps
 
-### Current Priority: Fix Trade Storage Issue
+### Current Priority: Implement Suspicious Wins Detection (Phase 7)
 
-1. **Debug Geopolitical Trade Storage** 🔥
-   - [ ] Investigate why detected trades aren't being stored
-   - [ ] Check process_trade() categorization logic
-   - [ ] Verify market_id is being set correctly
-   - [ ] Test with manual trade insertion
+1. **Database Schema** 🔥
+   - [ ] Create `market_resolutions` table
+   - [ ] Create `wallet_win_history` table
+   - [ ] Add win tracking to `wallet_metrics`
+   - [ ] Generate Alembic migration
 
-2. **Complete Dashboard Testing**
-   - [ ] Verify all pages work with real data
-   - [ ] Test pagination under load
-   - [ ] Fix deprecation warnings
+2. **Resolution Monitoring**
+   - [ ] Create `ResolutionMonitor` class
+   - [ ] Implement market polling logic
+   - [ ] Store resolutions to database
 
-3. **Documentation Updates**
+3. **Win/Loss Calculation**
+   - [ ] Create `WinLossCalculator` class
+   - [ ] Match trades to resolutions
+   - [ ] Calculate profit/loss
+
+4. **Documentation Updates**
    - [x] ✅ Update TODO.md
    - [x] ✅ Update PROJECT_SUMMARY.md
-   - [ ] Create PHASE6_COMPLETION.md when done
+   - [x] ✅ Technical spec: docs/SUSPICIOUS_WINS_SPEC.md
 
 ---
 
@@ -528,16 +626,17 @@
 - ✅ Phase 3: Suspicion Scoring (Core Complete - Jan 13)
 - ✅ Phase 4: Blockchain Verification (Core Complete - Jan 13)
 - ✅ Phase 5: Alerts & Notifications (Complete - Jan 13)
-- ⏳ Phase 6: Web Dashboard (Ready to Start)
+- ✅ Phase 6: Web Dashboard & Deployment (Complete - Jan 16)
+- 🔄 Phase 7: Suspicious Wins Detection (Planning - Jan 21)
 
 ### Q2 2026 (April-June)
-- ⏳ Phase 5: Alerts & Notifications
-- ⏳ Phase 6: Web Dashboard
-- ⏳ Phase 7: Validation & Deployment
+- ⏳ Phase 7: Suspicious Wins (Implementation)
+- ⏳ Phase 8: Validation & Optimization
+- ⏳ Advanced pattern recognition
 
 ### Q3 2026 (July-September)
-- ⏳ Production deployment
-- ⏳ Monitoring and optimization
+- ⏳ ML-based anomaly detection
+- ⏳ PizzINT integration (if available)
 - ⏳ Feature enhancements based on usage
 
 ### Q4 2026 (October-December)
@@ -549,9 +648,9 @@
 
 ## Questions & Decisions Needed
 
-- [ ] PostgreSQL vs SQLite for production?
-- [ ] Self-hosted vs cloud deployment?
-- [ ] Open source or proprietary?
+- [x] ✅ PostgreSQL vs SQLite for production? → **PostgreSQL (Railway)**
+- [x] ✅ Self-hosted vs cloud deployment? → **Railway cloud deployment**
+- [x] ✅ Open source or proprietary? → **GitHub public repo**
 - [ ] Monetization strategy (if any)?
 - [ ] User access model (single user vs multi-user)?
 - [ ] Data retention period?
@@ -583,3 +682,5 @@
 ---
 
 **Note:** This is a living document. Update regularly as tasks are completed and new requirements emerge.
+
+**Last Updated:** January 21, 2026

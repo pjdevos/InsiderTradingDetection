@@ -4,10 +4,12 @@
 
 The Geopolitical Insider Trading Detection System is a comprehensive monitoring platform designed to detect potential insider trading on Polymarket prediction markets by correlating large bets with operational signals (PizzINT Pentagon activity) and other OSINT indicators. The system aims to predict geopolitical events 12-72 hours before they become public by identifying suspicious betting patterns.
 
-**Current Status:** Phase 6 In Progress (Web Dashboard)
+**Current Status:** Phase 6 Complete (Deployed to Railway) | Phase 7 Planning (Suspicious Wins)
 **Started:** January 12, 2026
-**Latest Update:** January 14, 2026
-**Version:** 0.6.0 (Phase 6 In Progress)
+**Latest Update:** January 21, 2026
+**Version:** 0.7.0 (Production Deployed)
+**Repository:** https://github.com/pjdevos/InsiderTradingDetection
+**Live Dashboard:** Deployed on Railway (PostgreSQL backend)
 
 ---
 
@@ -1161,27 +1163,41 @@ EMAIL_TO=email1@example.com,email2@example.com,email3@example.com
 
 ### What It Cannot Do Yet
 
-⏳ **Advanced Pattern Recognition** (Phase 3/4 Optional)
+⏳ **Suspicious Win Detection** (Phase 7 - Planning)
+- Track market resolutions and outcomes
+- Calculate win/loss for completed trades
+- Score wallets by win patterns
+- Detect abnormally profitable traders
+- Technical spec complete: `docs/SUSPICIOUS_WINS_SPEC.md`
+
+⏳ **Advanced Pattern Recognition** (Phase 8+)
 - Complex pattern analysis
 - ML-based anomaly detection
 - Advanced transaction graph analysis
 
-⏳ **PizzINT Integration** (Phase 3 Optional)
+⏳ **PizzINT Integration** (Future)
 - No operational signal correlation
 - No Pentagon activity tracking
 - No temporal analysis
 
-✅ **Complete Alert System** (Phase 5 - Complete)
-- Telegram and Email alerts fully functional
-- Alert history tracking in database
-- Notification delivery audit trail
-
-✅ **Web Dashboard** (Phase 6 - In Progress)
-- Streamlit dashboard at http://localhost:8502
+✅ **Web Dashboard** (Phase 6 - Complete)
+- Streamlit dashboard deployed on Railway
 - Overview, Alerts, Trade History, Wallet Analysis, Statistics pages
 - Activity charts and visualizations
 - Pagination and filtering
 - SQL aggregations for efficient queries
+
+✅ **Production Deployment** (Phase 6 - Complete)
+- Deployed to Railway with PostgreSQL backend
+- GitHub repository: https://github.com/pjdevos/InsiderTradingDetection
+- Both dashboard and monitor services running
+- DNS retry logic for Railway private networking
+
+✅ **Market Resolution Detection** (Phase 7 Prep - Complete)
+- Price inference method for determining market outcomes
+- Winning outcome detected when price → ~1.0
+- API response parsing (JSON string handling)
+- Ready for win/loss tracking implementation
 
 ---
 
@@ -1469,10 +1485,10 @@ for trade in trades:
 - ⏳ Advanced alert rules engine
 - ⏳ Multi-channel support (SMS, Slack, etc.)
 
-### Phase 6: Web Dashboard & Visualization 🔄 IN PROGRESS
+### Phase 6: Web Dashboard & Visualization ✅ COMPLETE
 
 **Duration:** Week 6-7
-**Status:** In Progress (January 14, 2026)
+**Status:** ✅ Complete & Deployed (January 16, 2026)
 
 **Completed:**
 - ✅ Built Streamlit dashboard (`dashboard.py` - 600+ lines)
@@ -1494,31 +1510,71 @@ for trade in trades:
 - ✅ Added pagination to alerts page
 - ✅ Fixed timestamp conversion (unix int → datetime)
 
-**Dashboard URL:** http://localhost:8502
+**Railway Deployment (Jan 16, 2026):**
+- ✅ Created Dockerfile for production deployment
+- ✅ Added Railway configuration files (railway.toml, railway.json, Procfile)
+- ✅ Added PostgreSQL database connection with retry logic
+- ✅ Fixed DNS resolution delays for Railway private networking
+- ✅ Both dashboard and monitor services running in production
+- ✅ Code pushed to GitHub repository
 
-**Remaining:**
-- [ ] Debug geopolitical trade storage issue
-- [ ] Network Patterns page
-- [ ] Export functionality
-- [ ] Fix Streamlit deprecation warnings
+**Dashboard URL:** Deployed on Railway (public access)
 
 **Deliverables:**
 - ✅ Web dashboard (Streamlit)
 - ✅ Data visualizations
 - ✅ User interface
-- [ ] Documentation
+- ✅ Production deployment
+- ✅ GitHub repository
 
-### Phase 7: Validation & Deployment ⏳ PLANNED
+### Phase 7: Suspicious Wins Detection 🔄 PLANNING
 
-**Duration:** Week 7-8
+**Duration:** Week 8-11
+**Status:** Planning (January 21, 2026)
+
+**Overview:**
+New feature to detect suspicious WINS (not just suspicious bets). This tracks market resolutions and identifies wallets with abnormally high win rates on high-conviction geopolitical trades.
+
+**Key Components (from Technical Specification):**
+1. **Market Resolution Monitoring**
+   - Track market outcomes via price inference (winner price → ~1.0)
+   - Store resolution data in `market_resolutions` table
+   - Poll resolved markets every 5 minutes
+
+2. **Win/Loss Tracking**
+   - Calculate actual win/loss for each trade after resolution
+   - Track profit/loss in USD
+   - Store in `wallet_win_history` table
+
+3. **Suspicious Win Detection**
+   - New scoring algorithm for WIN patterns
+   - Factors: Win rate, profit concentration, timing patterns
+   - Alert levels: WATCH_WIN (60+), SUSPICIOUS_WIN (75+), CRITICAL_WIN (90+)
+
+**Technical Specification:** `docs/SUSPICIOUS_WINS_SPEC.md` (660 lines)
+
+**Resolution Detection (Already Implemented):**
+- ✅ `BlockchainClient.infer_resolution_from_prices()` - Price inference method
+- ✅ Handles JSON string parsing from API
+- ✅ Tested and working with Polymarket API
+
+**Goals:**
+- Detect wallets with suspiciously consistent wins
+- Identify profit patterns that suggest insider knowledge
+- Track win streaks on high-stakes geopolitical trades
+- Correlate wins with pre-event suspicious betting
+
+### Phase 8: Validation & Optimization ⏳ PLANNED
+
+**Duration:** Week 12+
 **Status:** Not started
 
 **Goals:**
 - Collect historical data
 - Backtest predictions
 - Calculate accuracy metrics
-- Optimize algorithms
-- Deploy to production
+- Optimize scoring algorithms
+- Performance tuning
 
 **Success Metrics:**
 - Prediction accuracy: >70%
@@ -1576,24 +1632,27 @@ A comprehensive code review was conducted on January 12, 2026. Key findings:
 
 ## Known Issues & Limitations
 
-### Current Issues (Jan 14, 2026)
+### Current Issues (Jan 21, 2026)
 
-1. **Geopolitical Trade Storage** 🔥
-   - Monitor correctly detects trades
-   - Timestamp conversion is fixed
-   - Some geopolitical trades not being stored to database
-   - Need to debug process_trade() categorization flow
-
-2. **Dashboard Deprecation Warning**
+1. **Dashboard Deprecation Warning** (Low Priority)
    - Streamlit `use_container_width` deprecated
    - Needs migration to `width='stretch'`
+   - Deadline: After 2025-12-31
 
-3. **Test Mismatch**
-   - 1 test failing due to keyword config change
-   - 39/40 tests passing
+2. **Blockchain Query Limitations**
+   - Conditional Tokens contract queries fail for Polymarket
+   - Using price inference as workaround (works well)
+   - May need alternative approach for some edge cases
 
-### Resolved Issues (Jan 14, 2026) ✅
+### Resolved Issues ✅
 
+**Jan 16, 2026 (Railway Deployment):**
+1. ~~Railway DNS resolution delays~~ → Added retry logic with exponential backoff
+2. ~~Missing psycopg2~~ → Added psycopg2-binary to requirements.txt
+3. ~~Build failures~~ → Created custom Dockerfile
+4. ~~Null market_id errors~~ → Added validation to skip invalid markets
+
+**Jan 14, 2026 (Code Quality):**
 1. ~~SQL injection in dashboard~~ → Fixed with escape characters and regex validation
 2. ~~Missing blockchain input validation~~ → Added `_validate_address()`, `_validate_tx_hash()`
 3. ~~Blockchain resource exhaustion~~ → Added scanning limits, reduced API calls from ~130 to ~6
@@ -1603,6 +1662,9 @@ A comprehensive code review was conducted on January 12, 2026. Key findings:
 7. ~~Timestamp conversion~~ → Unix int converted to datetime in storage.py
 8. ~~Timezone issues~~ → Using timezone-aware datetime throughout
 9. ~~Resource leaks~~ → Proper session management with context managers
+
+**Jan 19, 2026 (Resolution Detection):**
+1. ~~JSON string parsing in price inference~~ → Added JSON.loads() for API response handling
 
 ### Remaining Limitations
 
@@ -1821,6 +1883,6 @@ InsiderTradingDetection/
 
 ---
 
-**Project Summary Version:** 1.6
-**Last Updated:** January 14, 2026
-**Status:** Phase 6 In Progress (Web Dashboard) 🔄
+**Project Summary Version:** 1.7
+**Last Updated:** January 21, 2026
+**Status:** Phase 6 Complete ✅ | Phase 7 Planning (Suspicious Wins) 🔄
