@@ -63,7 +63,8 @@ class RealTimeTradeMonitor:
         Race condition prevention:
         - Capture poll_start_time BEFORE fetching to ensure no trades are missed
         - Use a small overlap buffer to handle clock skew and API delays
-        - Only update last_check_time after successful fetch (not after processing)
+        - Only update last_check_time AFTER all trades are successfully processed
+        - Process trades in batch to ensure atomicity
         """
         # Capture the current time BEFORE fetching - this prevents race conditions
         # where trades arrive during our fetch/process cycle
@@ -81,13 +82,10 @@ class RealTimeTradeMonitor:
                 limit=1000
             )
 
-            # Update last_check_time immediately after successful fetch
-            # This ensures we don't miss trades even if processing fails
-            # The overlap buffer prevents duplicates from being missed
-            self.last_check_time = poll_start_time
-
             if not trades:
                 logger.debug("No new trades found")
+                # Safe to update timestamp even with no trades
+                self.last_check_time = poll_start_time
                 return
 
             logger.info(f"Found {len(trades)} new trades")
@@ -101,10 +99,33 @@ class RealTimeTradeMonitor:
             if large_trades:
                 logger.info(f"Found {len(large_trades)} large trades (>=${self.min_bet_size})")
 
-            # Process each large trade
-            # Note: Duplicates are handled by the database (unique constraint on transaction_hash)
+            # Process all large trades
+            # Note: Due to overlap buffer, some trades may be processed multiple times.
+            # Duplicates are safely ignored by the database (unique constraint on transaction_hash)
+            processed_count = 0
+            failed_count = 0
+
             for trade in large_trades:
-                self.process_trade(trade)
+                try:
+                    self.process_trade(trade)
+                    processed_count += 1
+                except Exception as e:
+                    failed_count += 1
+                    logger.error(f"Failed to process trade: {e}", exc_info=True)
+                    # Continue processing other trades, but don't update timestamp
+                    # This ensures failed trades will be retried on next poll
+
+            # Only update last_check_time if ALL trades were processed successfully
+            # This ensures failed trades are retried on the next poll (with overlap buffer)
+            if failed_count == 0:
+                self.last_check_time = poll_start_time
+                if large_trades:
+                    logger.info(f"Successfully processed {processed_count} trades, updating checkpoint to {poll_start_time.isoformat()}")
+            else:
+                logger.warning(
+                    f"Processed {processed_count}/{len(large_trades)} trades successfully, but {failed_count} failed. "
+                    f"Checkpoint NOT updated - failed trades will be retried on next poll."
+                )
 
         except Exception as e:
             # Don't update last_check_time on failure - trades will be refetched
@@ -228,26 +249,23 @@ class RealTimeTradeMonitor:
                 alert_level = None
 
             # Store in database
+            # NOTE: This raises exceptions on storage failures to trigger retry logic in poll_recent_trades()
             stored_trade = None
-            try:
-                stored_trade = DataStorageService.store_trade(
-                    trade_data=trade,
-                    market_data=market,
-                    suspicion_score=suspicion_score
+            stored_trade = DataStorageService.store_trade(
+                trade_data=trade,
+                market_data=market,
+                suspicion_score=suspicion_score
+            )
+
+            if stored_trade:
+                logger.info(
+                    f"Stored trade in database: ID={stored_trade.id}, "
+                    f"Score={stored_trade.suspicion_score or 0}/100, "
+                    f"Alert={stored_trade.alert_level or 'NONE'}"
                 )
-
-                if stored_trade:
-                    logger.info(
-                        f"Stored trade in database: ID={stored_trade.id}, "
-                        f"Score={stored_trade.suspicion_score or 0}/100, "
-                        f"Alert={stored_trade.alert_level or 'NONE'}"
-                    )
-                else:
-                    logger.debug("Trade not stored (likely duplicate)")
-
-            except Exception as e:
-                logger.error(f"Failed to store trade in database: {e}", exc_info=True)
-                # Continue processing even if storage fails
+            else:
+                # Trade not stored (likely duplicate) - this is OK, don't raise error
+                logger.debug("Trade not stored (likely duplicate)")
 
             # Store alert in database if trade was stored and alert_level exists
             stored_alert = None

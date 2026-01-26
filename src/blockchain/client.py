@@ -2,6 +2,7 @@
 Blockchain verification client for Polygon network
 
 Provides on-chain verification of trades, wallet forensics, and mixer detection.
+Includes rate limiting and circuit breaker protection for RPC calls.
 """
 import re
 import logging
@@ -10,6 +11,13 @@ from typing import Dict, Optional, List, Tuple
 from web3 import Web3
 from web3.exceptions import Web3Exception
 from config import config
+from blockchain.rate_limiter import (
+    RateLimiter,
+    CircuitBreaker,
+    RetryWithBackoff,
+    CircuitBreakerOpenError,
+    RateLimitExceededError
+)
 
 logger = logging.getLogger(__name__)
 
@@ -67,7 +75,7 @@ class BlockchainClient:
 
     def __init__(self, rpc_url: str = None):
         """
-        Initialize blockchain client
+        Initialize blockchain client with rate limiting and circuit breaker protection.
 
         Args:
             rpc_url: Polygon RPC endpoint URL (defaults to config)
@@ -79,13 +87,41 @@ class BlockchainClient:
             logger.warning("No Polygon RPC URL configured, using public endpoint")
             self.rpc_url = 'https://polygon-rpc.com'
 
+        # Initialize rate limiter
+        self.rate_limiter = RateLimiter(
+            calls_per_second=config.RPC_RATE_LIMIT_CALLS_PER_SECOND,
+            burst_size=config.RPC_RATE_LIMIT_BURST_SIZE
+        )
+
+        # Initialize circuit breaker
+        self.circuit_breaker = CircuitBreaker(
+            failure_threshold=config.RPC_CIRCUIT_BREAKER_FAILURE_THRESHOLD,
+            recovery_timeout=config.RPC_CIRCUIT_BREAKER_RECOVERY_TIMEOUT,
+            success_threshold=config.RPC_CIRCUIT_BREAKER_SUCCESS_THRESHOLD
+        )
+
+        # Initialize retry handler
+        self.retry_handler = RetryWithBackoff(
+            max_retries=config.RPC_MAX_RETRIES,
+            base_delay=config.RPC_RETRY_BASE_DELAY,
+            max_delay=config.RPC_RETRY_MAX_DELAY
+        )
+
         try:
             self.w3 = Web3(Web3.HTTPProvider(self.rpc_url))
 
-            # Test connection
-            if self.w3.is_connected():
-                chain_id = self.w3.eth.chain_id
-                logger.info(f"Connected to Polygon (chain_id={chain_id})")
+            # Test connection with rate limiting and circuit breaker
+            def test_connection():
+                return self.w3.is_connected()
+
+            is_connected = self._protected_rpc_call(test_connection)
+
+            if is_connected:
+                chain_id = self._protected_rpc_call(lambda: self.w3.eth.chain_id)
+                logger.info(
+                    f"Connected to Polygon (chain_id={chain_id}) with rate limiting "
+                    f"({config.RPC_RATE_LIMIT_CALLS_PER_SECOND} calls/sec)"
+                )
 
                 # Verify it's Polygon mainnet
                 if chain_id != 137:
@@ -101,6 +137,49 @@ class BlockchainClient:
     def is_connected(self) -> bool:
         """Check if connected to blockchain"""
         return self.w3 is not None and self.w3.is_connected()
+
+    def _protected_rpc_call(self, func, *args, **kwargs):
+        """
+        Execute RPC call with rate limiting, circuit breaker, and retry protection.
+
+        This wrapper applies all protective measures to prevent API abuse and handle failures gracefully.
+
+        Args:
+            func: Function to call (RPC method)
+            *args: Positional arguments for function
+            **kwargs: Keyword arguments for function
+
+        Returns:
+            Function result
+
+        Raises:
+            CircuitBreakerOpenError: If circuit breaker is open
+            RateLimitExceededError: If rate limit timeout exceeded
+            Exception: Original exception if all retries fail
+        """
+        def rate_limited_call():
+            """Inner function that applies rate limiting"""
+            self.rate_limiter.acquire()
+            return func(*args, **kwargs)
+
+        def circuit_protected_call():
+            """Apply circuit breaker protection"""
+            return self.circuit_breaker.call(rate_limited_call)
+
+        # Execute with retry logic
+        return self.retry_handler.execute(circuit_protected_call)
+
+    def get_protection_stats(self) -> Dict:
+        """
+        Get statistics from rate limiter and circuit breaker.
+
+        Returns:
+            Dict with rate limiter and circuit breaker statistics
+        """
+        return {
+            'rate_limiter': self.rate_limiter.get_stats(),
+            'circuit_breaker': self.circuit_breaker.get_stats()
+        }
 
     def _validate_address(self, address: str) -> str:
         """
@@ -193,18 +272,18 @@ class BlockchainClient:
             return None
 
         try:
-            # Get transaction
-            tx = self.w3.eth.get_transaction(tx_hash)
+            # Get transaction with rate limiting and circuit breaker
+            tx = self._protected_rpc_call(self.w3.eth.get_transaction, tx_hash)
 
             if not tx:
                 logger.warning(f"Transaction not found: {tx_hash}")
                 return None
 
             # Get transaction receipt for status
-            receipt = self.w3.eth.get_transaction_receipt(tx_hash)
+            receipt = self._protected_rpc_call(self.w3.eth.get_transaction_receipt, tx_hash)
 
             # Get block for timestamp
-            block = self.w3.eth.get_block(tx['blockNumber'])
+            block = self._protected_rpc_call(self.w3.eth.get_block, tx['blockNumber'])
 
             return {
                 'hash': tx['hash'].hex(),
@@ -220,6 +299,9 @@ class BlockchainClient:
                 'confirmed': True
             }
 
+        except CircuitBreakerOpenError as e:
+            logger.error(f"Circuit breaker open, cannot verify transaction {tx_hash}: {e}")
+            return None
         except Exception as e:
             logger.error(f"Error verifying transaction {tx_hash}: {e}")
             return None
@@ -246,12 +328,12 @@ class BlockchainClient:
             return None
 
         try:
-            # Get current block
-            current_block = self.w3.eth.block_number
+            # Get current block with rate limiting
+            current_block = self._protected_rpc_call(lambda: self.w3.eth.block_number)
             api_calls = 1  # Count the block_number call
 
             # Check if wallet has any transactions (quick check first)
-            tx_count = self.w3.eth.get_transaction_count(wallet_address)
+            tx_count = self._protected_rpc_call(self.w3.eth.get_transaction_count, wallet_address)
             api_calls += 1
 
             if tx_count == 0:
@@ -281,7 +363,12 @@ class BlockchainClient:
                     break
 
                 try:
-                    block = self.w3.eth.get_block(block_num, full_transactions=True)
+                    # Use protected RPC call with rate limiting
+                    block = self._protected_rpc_call(
+                        self.w3.eth.get_block,
+                        block_num,
+                        full_transactions=True
+                    )
                     api_calls += 1
 
                     for tx in block['transactions']:
@@ -292,13 +379,16 @@ class BlockchainClient:
                     if first_tx_block:
                         break
 
+                except CircuitBreakerOpenError:
+                    logger.error("Circuit breaker opened during wallet age scan")
+                    break
                 except Exception as e:
                     logger.debug(f"Error checking block {block_num}: {e}")
                     api_calls += 1  # Count failed calls too
                     continue
 
             if first_tx_block:
-                block = self.w3.eth.get_block(first_tx_block)
+                block = self._protected_rpc_call(self.w3.eth.get_block, first_tx_block)
                 first_tx_date = datetime.fromtimestamp(block['timestamp'], tz=timezone.utc)
                 age_days = (datetime.now(timezone.utc) - first_tx_date).days
 
@@ -315,6 +405,9 @@ class BlockchainClient:
                 )
                 return None
 
+        except CircuitBreakerOpenError as e:
+            logger.error(f"Circuit breaker open, cannot calculate wallet age: {e}")
+            return None
         except Exception as e:
             logger.error(f"Error calculating wallet age for {wallet_address}: {e}")
             return None
@@ -384,7 +477,7 @@ class BlockchainClient:
 
                 # Get recent incoming transactions with limited block range
                 try:
-                    current_block = self.w3.eth.block_number
+                    current_block = self._protected_rpc_call(lambda: self.w3.eth.block_number)
                     api_calls[0] += 1
 
                     # Use configured limit for blocks to check
@@ -396,7 +489,12 @@ class BlockchainClient:
                             break
 
                         try:
-                            block = self.w3.eth.get_block(block_num, full_transactions=True)
+                            # Use protected RPC call with rate limiting
+                            block = self._protected_rpc_call(
+                                self.w3.eth.get_block,
+                                block_num,
+                                full_transactions=True
+                            )
                             api_calls[0] += 1
 
                             for tx in block['transactions']:
@@ -414,10 +512,15 @@ class BlockchainClient:
                                     elif current_depth < depth:
                                         # Recursively check sender (with limits)
                                         check_address(sender, current_depth + 1)
+                        except CircuitBreakerOpenError:
+                            logger.error("Circuit breaker opened during mixer detection")
+                            return  # Exit recursive check
                         except:
                             api_calls[0] += 1  # Count failed calls
                             continue
 
+                except CircuitBreakerOpenError:
+                    logger.error("Circuit breaker opened during mixer detection")
                 except Exception as e:
                     logger.debug(f"Error checking transactions for {address}: {e}")
 
@@ -539,7 +642,7 @@ class BlockchainClient:
             return None
 
         try:
-            balance_wei = self.w3.eth.get_balance(wallet_address)
+            balance_wei = self._protected_rpc_call(self.w3.eth.get_balance, wallet_address)
             balance_matic = self.w3.from_wei(balance_wei, 'ether')
 
             return {
@@ -549,6 +652,9 @@ class BlockchainClient:
                 'timestamp': datetime.now(timezone.utc)
             }
 
+        except CircuitBreakerOpenError as e:
+            logger.error(f"Circuit breaker open, cannot get balance: {e}")
+            return None
         except Exception as e:
             logger.error(f"Error getting balance for {wallet_address}: {e}")
             return None
@@ -575,8 +681,11 @@ class BlockchainClient:
             return None
 
         try:
-            return self.w3.eth.get_transaction_count(wallet_address)
+            return self._protected_rpc_call(self.w3.eth.get_transaction_count, wallet_address)
 
+        except CircuitBreakerOpenError as e:
+            logger.error(f"Circuit breaker open, cannot get transaction count: {e}")
+            return None
         except Exception as e:
             logger.error(f"Error getting transaction count for {wallet_address}: {e}")
             return None
@@ -634,12 +743,16 @@ class BlockchainClient:
             # Convert condition_id to bytes32
             condition_bytes = bytes.fromhex(condition_id[2:])
 
-            # Get payout numerators (returns array like [1, 0] or [0, 1] or [0, 0])
-            payout_numerators = contract.functions.payoutNumerators(condition_bytes).call()
+            # Get payout numerators with rate limiting (returns array like [1, 0] or [0, 1] or [0, 0])
+            payout_numerators = self._protected_rpc_call(
+                lambda: contract.functions.payoutNumerators(condition_bytes).call()
+            )
 
             # Get outcome count
             try:
-                outcome_count = contract.functions.getOutcomeSlotCount(condition_bytes).call()
+                outcome_count = self._protected_rpc_call(
+                    lambda: contract.functions.getOutcomeSlotCount(condition_bytes).call()
+                )
             except Exception:
                 outcome_count = len(payout_numerators) if payout_numerators else 2
 

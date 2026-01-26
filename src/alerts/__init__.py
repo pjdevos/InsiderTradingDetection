@@ -1,6 +1,10 @@
 """
 Alert and notification system module
 """
+from alerts.credential_validator import (
+    CredentialValidator,
+    CredentialValidationError
+)
 from alerts.telegram_bot import (
     TelegramAlertBot,
     AlertRateLimiter,
@@ -25,6 +29,9 @@ from alerts.templates import (
 )
 
 __all__ = [
+    # Credential Validation
+    'CredentialValidator',
+    'CredentialValidationError',
     # Telegram
     'TelegramAlertBot',
     'AlertRateLimiter',

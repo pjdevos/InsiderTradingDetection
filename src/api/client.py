@@ -6,6 +6,7 @@ import time
 from typing import Dict, List, Optional
 from datetime import datetime, timedelta
 import logging
+from web3 import Web3
 
 from config import config
 
@@ -55,13 +56,13 @@ class PolymarketAPIClient:
 
     def _validate_wallet_address(self, address: str) -> str:
         """
-        Validate Ethereum wallet address format
+        Validate Ethereum wallet address format with EIP-55 checksum validation
 
         Args:
             address: Ethereum address to validate
 
         Returns:
-            Validated address
+            Checksummed address (normalized format)
 
         Raises:
             ValueError: If address format is invalid
@@ -84,7 +85,13 @@ class PolymarketAPIClient:
         except ValueError:
             raise ValueError(f"Wallet address contains invalid hex characters")
 
-        return address.lower()
+        # Validate and convert to checksum address using Web3 (EIP-55)
+        # This accepts both checksummed and non-checksummed addresses
+        # and returns the properly checksummed version
+        try:
+            return Web3.to_checksum_address(address)
+        except ValueError as e:
+            raise ValueError(f"Invalid Ethereum address: {address}") from e
 
     def _validate_limit(self, limit: int, max_limit: int = 1000) -> int:
         """
@@ -301,6 +308,12 @@ class PolymarketAPIClient:
             taker: Filter by taker address
             limit: Maximum number of fills
         """
+        # Validate inputs
+        if maker:
+            maker = self._validate_wallet_address(maker)
+        if taker:
+            taker = self._validate_wallet_address(taker)
+
         url = f"{self.BASE_URLS['clob']}/order-fills"
         params = {'limit': limit}
 

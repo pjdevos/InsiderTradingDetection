@@ -34,6 +34,21 @@ class Config:
         'NEG_RISK_CTF_EXCHANGE': '0xC5d563A36AE78145C45a50134d48A1215220f80a'
     }
 
+    # Blockchain RPC Rate Limiting
+    # Public RPCs typically allow 10-30 RPS, premium endpoints allow more
+    RPC_RATE_LIMIT_CALLS_PER_SECOND = float(os.getenv('RPC_RATE_LIMIT_CALLS_PER_SECOND', '10.0'))
+    RPC_RATE_LIMIT_BURST_SIZE = int(os.getenv('RPC_RATE_LIMIT_BURST_SIZE', '20'))
+
+    # Circuit Breaker Configuration
+    RPC_CIRCUIT_BREAKER_FAILURE_THRESHOLD = int(os.getenv('RPC_CIRCUIT_BREAKER_FAILURE_THRESHOLD', '5'))
+    RPC_CIRCUIT_BREAKER_RECOVERY_TIMEOUT = float(os.getenv('RPC_CIRCUIT_BREAKER_RECOVERY_TIMEOUT', '60.0'))
+    RPC_CIRCUIT_BREAKER_SUCCESS_THRESHOLD = int(os.getenv('RPC_CIRCUIT_BREAKER_SUCCESS_THRESHOLD', '2'))
+
+    # Retry Configuration
+    RPC_MAX_RETRIES = int(os.getenv('RPC_MAX_RETRIES', '3'))
+    RPC_RETRY_BASE_DELAY = float(os.getenv('RPC_RETRY_BASE_DELAY', '1.0'))
+    RPC_RETRY_MAX_DELAY = float(os.getenv('RPC_RETRY_MAX_DELAY', '30.0'))
+
     # Monitoring Thresholds
     MIN_BET_SIZE_USD = float(os.getenv('MIN_BET_SIZE_USD', '10000'))
     SUSPICION_THRESHOLD_WATCH = int(os.getenv('SUSPICION_THRESHOLD_WATCH', '50'))
@@ -58,6 +73,11 @@ class Config:
     SMTP_PORT = int(os.getenv('SMTP_PORT', '587'))
     SMTP_USERNAME = os.getenv('SMTP_USERNAME')
     SMTP_PASSWORD = os.getenv('SMTP_PASSWORD')
+
+    # Alert System Configuration
+    # When True, system will fail at startup if alert credentials are invalid/missing
+    # When False, system will run without alerts (for development/testing only)
+    ALERTS_REQUIRED = os.getenv('ALERTS_REQUIRED', 'true').lower() in ('true', '1', 'yes')
 
     # Logging
     LOG_LEVEL = os.getenv('LOG_LEVEL', 'INFO')
@@ -136,10 +156,9 @@ class Config:
             if not cls.POLYGON_RPC_URL:
                 warnings.append("POLYGON_RPC_URL not configured (needed for Phase 4)")
 
-        # Phase 5+: Alerts
+        # Phase 5+: Alerts - Use strict validation
         if phase >= 5:
-            if not cls.TELEGRAM_BOT_TOKEN or not cls.TELEGRAM_CHAT_ID:
-                warnings.append("Telegram configuration incomplete (needed for Phase 5)")
+            cls.validate_alert_credentials()
 
         if errors:
             raise ValueError(f"Configuration errors:\n" + "\n".join(f"  - {e}" for e in errors))
@@ -151,6 +170,93 @@ class Config:
                 logger.warning(warning)
 
         return True
+
+    @classmethod
+    def validate_alert_credentials(cls):
+        """
+        Validate alert system credentials with fail-fast behavior.
+
+        When ALERTS_REQUIRED=true (default), this method will raise an error
+        if credentials are missing or contain placeholder values.
+
+        When ALERTS_REQUIRED=false, it will log prominent warnings but allow
+        the system to run without alerts (for development/testing only).
+
+        Raises:
+            ValueError: When ALERTS_REQUIRED=true and credentials are invalid
+        """
+        from alerts.credential_validator import CredentialValidator, CredentialValidationError
+
+        import logging
+        logger = logging.getLogger(__name__)
+
+        # Validate Telegram credentials
+        telegram_valid, telegram_errors = CredentialValidator.validate_telegram_credentials(
+            bot_token=cls.TELEGRAM_BOT_TOKEN,
+            chat_id=cls.TELEGRAM_CHAT_ID,
+            required=cls.ALERTS_REQUIRED
+        )
+
+        # Validate Email credentials
+        email_valid, email_errors = CredentialValidator.validate_email_credentials(
+            smtp_server=cls.SMTP_SERVER,
+            smtp_port=cls.SMTP_PORT,
+            smtp_username=cls.SMTP_USERNAME,
+            smtp_password=cls.SMTP_PASSWORD,
+            from_email=cls.EMAIL_FROM,
+            to_email=cls.EMAIL_TO,
+            required=cls.ALERTS_REQUIRED
+        )
+
+        # Determine overall alert status
+        any_alerts_configured = telegram_valid or email_valid
+        all_alerts_configured = telegram_valid and email_valid
+
+        # Handle based on ALERTS_REQUIRED setting
+        if cls.ALERTS_REQUIRED:
+            # In production mode, at least one alert method must be configured
+            if not any_alerts_configured:
+                all_errors = telegram_errors + email_errors
+                error_msg = (
+                    "ALERTS_REQUIRED=true but no alert systems are properly configured!\n\n"
+                    "Alert Configuration Errors:\n"
+                )
+                for error in all_errors:
+                    error_msg += f"  - {error}\n"
+
+                error_msg += (
+                    "\nTo fix this, either:\n"
+                    "  1. Configure at least one alert system (Telegram OR Email) in your .env file\n"
+                    "  2. Set ALERTS_REQUIRED=false to run without alerts (NOT recommended for production)\n"
+                )
+
+                raise CredentialValidationError(error_msg)
+
+            # Warn about partially configured alerts
+            if not all_alerts_configured:
+                if not telegram_valid:
+                    logger.warning("Telegram alerts not configured - only Email alerts will be sent")
+                    CredentialValidator.log_disabled_alert_warning("Telegram")
+                if not email_valid:
+                    logger.warning("Email alerts not configured - only Telegram alerts will be sent")
+                    CredentialValidator.log_disabled_alert_warning("Email")
+
+            logger.info("Alert system validation passed - alerts are properly configured")
+
+        else:
+            # Development/testing mode - alerts are optional
+            if not any_alerts_configured:
+                CredentialValidator.log_disabled_alert_warning("ALL")
+                logger.warning(
+                    "Running in ALERTS_REQUIRED=false mode - this should ONLY be used for "
+                    "development and testing. NEVER run in production without alerts!"
+                )
+            else:
+                logger.info("Alert credentials partially configured (ALERTS_REQUIRED=false mode)")
+                if not telegram_valid:
+                    CredentialValidator.log_disabled_alert_warning("Telegram")
+                if not email_valid:
+                    CredentialValidator.log_disabled_alert_warning("Email")
 
 
 # Create config instance

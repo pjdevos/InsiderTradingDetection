@@ -9,6 +9,7 @@ from typing import Dict, Optional, List
 from datetime import datetime, timezone
 
 from config import config
+from alerts.credential_validator import CredentialValidator, CredentialValidationError
 from alerts.templates import email_alert_html
 
 logger = logging.getLogger(__name__)
@@ -29,7 +30,7 @@ class EmailAlertService:
         to_email: str = None
     ):
         """
-        Initialize email alert service
+        Initialize email alert service with strict credential validation.
 
         Args:
             smtp_server: SMTP server address
@@ -38,6 +39,9 @@ class EmailAlertService:
             smtp_password: SMTP password
             from_email: Sender email address
             to_email: Recipient email address (or comma-separated list)
+
+        Raises:
+            CredentialValidationError: If ALERTS_REQUIRED=true and credentials are invalid
         """
         self.smtp_server = smtp_server or config.SMTP_SERVER
         self.smtp_port = smtp_port or config.SMTP_PORT
@@ -46,36 +50,47 @@ class EmailAlertService:
         self.from_email = from_email or config.EMAIL_FROM
         self.to_email = to_email or config.EMAIL_TO
 
-        if not self.smtp_username or 'your' in self.smtp_username.lower():
-            logger.warning("No valid SMTP username configured")
+        # Validate credentials based on ALERTS_REQUIRED setting
+        is_valid, errors = CredentialValidator.validate_email_credentials(
+            smtp_server=self.smtp_server,
+            smtp_port=self.smtp_port,
+            smtp_username=self.smtp_username,
+            smtp_password=self.smtp_password,
+            from_email=self.from_email,
+            to_email=self.to_email,
+            required=config.ALERTS_REQUIRED
+        )
 
-        if not self.from_email or 'your' in self.from_email.lower():
-            logger.warning("No valid from email configured")
-
-        if not self.to_email or 'your' in self.to_email.lower():
-            logger.warning("No valid to email configured")
+        if not is_valid:
+            if config.ALERTS_REQUIRED:
+                # Fail fast when alerts are required
+                error_msg = "Email/SMTP credentials validation failed:\n"
+                for error in errors:
+                    error_msg += f"  - {error}\n"
+                raise CredentialValidationError(error_msg)
+            else:
+                # Allow running without email when alerts not required
+                CredentialValidator.log_disabled_alert_warning("Email")
 
     def is_configured(self) -> bool:
         """
         Check if email service is properly configured
 
         Returns:
-            True if all required settings are present
+            True if all required settings are present and valid
         """
-        required_settings = [
-            self.smtp_server,
-            self.smtp_username,
-            self.smtp_password,
-            self.from_email,
-            self.to_email
-        ]
+        # Use the credential validator for consistent validation
+        is_valid, _ = CredentialValidator.validate_email_credentials(
+            smtp_server=self.smtp_server,
+            smtp_port=self.smtp_port,
+            smtp_username=self.smtp_username,
+            smtp_password=self.smtp_password,
+            from_email=self.from_email,
+            to_email=self.to_email,
+            required=False  # Don't raise errors in this method, just return bool
+        )
 
-        # Check that all settings exist and don't contain placeholder text
-        for setting in required_settings:
-            if not setting or 'your' in str(setting).lower():
-                return False
-
-        return True
+        return is_valid
 
     def get_recipients(self) -> List[str]:
         """

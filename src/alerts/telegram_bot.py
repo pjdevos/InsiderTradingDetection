@@ -10,6 +10,7 @@ from telegram.constants import ParseMode
 from telegram.error import TelegramError
 
 from config import config
+from alerts.credential_validator import CredentialValidator, CredentialValidationError
 from alerts.templates import (
     telegram_alert_message,
     telegram_welcome_message,
@@ -34,20 +35,38 @@ class TelegramAlertBot:
         chat_id: str = None
     ):
         """
-        Initialize Telegram bot
+        Initialize Telegram bot with strict credential validation.
 
         Args:
             bot_token: Telegram bot token
             chat_id: Default chat ID for alerts
+
+        Raises:
+            CredentialValidationError: If ALERTS_REQUIRED=true and credentials are invalid
         """
         self.bot_token = bot_token or config.TELEGRAM_BOT_TOKEN
         self.chat_id = chat_id or config.TELEGRAM_CHAT_ID
 
-        if not self.bot_token or 'your' in self.bot_token.lower():
-            logger.warning("No valid Telegram bot token configured")
-            self.bot = None
-            self.application = None
-            return
+        # Validate credentials based on ALERTS_REQUIRED setting
+        is_valid, errors = CredentialValidator.validate_telegram_credentials(
+            bot_token=self.bot_token,
+            chat_id=self.chat_id,
+            required=config.ALERTS_REQUIRED
+        )
+
+        if not is_valid:
+            if config.ALERTS_REQUIRED:
+                # Fail fast when alerts are required
+                error_msg = "Telegram credentials validation failed:\n"
+                for error in errors:
+                    error_msg += f"  - {error}\n"
+                raise CredentialValidationError(error_msg)
+            else:
+                # Allow running without Telegram when alerts not required
+                CredentialValidator.log_disabled_alert_warning("Telegram")
+                self.bot = None
+                self.application = None
+                return
 
         try:
             # Create bot instance
@@ -65,9 +84,15 @@ class TelegramAlertBot:
             logger.info("Telegram bot initialized successfully")
 
         except Exception as e:
-            logger.error(f"Failed to initialize Telegram bot: {e}")
-            self.bot = None
-            self.application = None
+            # If we get here with ALERTS_REQUIRED=true, this is a critical error
+            if config.ALERTS_REQUIRED:
+                raise CredentialValidationError(
+                    f"Failed to initialize Telegram bot (ALERTS_REQUIRED=true): {e}"
+                ) from e
+            else:
+                logger.error(f"Failed to initialize Telegram bot: {e}")
+                self.bot = None
+                self.application = None
 
     def is_configured(self) -> bool:
         """Check if bot is properly configured"""
@@ -155,8 +180,12 @@ class TelegramAlertBot:
 
         target_chat_id = chat_id or self.chat_id
 
-        if not target_chat_id or 'your' in target_chat_id.lower():
-            logger.warning("No valid chat ID configured")
+        # Validate chat ID
+        if CredentialValidator.is_placeholder(target_chat_id):
+            if config.ALERTS_REQUIRED:
+                logger.error("Cannot send alert: Chat ID is missing or placeholder (ALERTS_REQUIRED=true)")
+            else:
+                logger.warning("Cannot send alert: Chat ID is missing or placeholder")
             return False
 
         try:
@@ -281,8 +310,12 @@ class TelegramAlertBot:
 
         target_chat_id = chat_id or self.chat_id
 
-        if not target_chat_id or 'your' in target_chat_id.lower():
-            logger.warning("No valid chat ID configured")
+        # Validate chat ID
+        if CredentialValidator.is_placeholder(target_chat_id):
+            if config.ALERTS_REQUIRED:
+                logger.error("Cannot send alert: Chat ID is missing or placeholder (ALERTS_REQUIRED=true)")
+            else:
+                logger.warning("Cannot send alert: Chat ID is missing or placeholder")
             return False
 
         try:

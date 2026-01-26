@@ -312,13 +312,28 @@ def show_trade_history():
         query = session.query(Trade)
 
         if search:
-            # Sanitize input - escape SQL wildcard characters to prevent injection
-            search_safe = search.replace('\\', '\\\\').replace('%', '\\%').replace('_', '\\_')
-            search_pattern = f"%{search_safe}%"
-            query = query.filter(
-                (Trade.market_title.ilike(search_pattern, escape='\\')) |
-                (Trade.wallet_address.ilike(search_pattern, escape='\\'))
-            )
+            # Validate and sanitize input
+            # Remove any null bytes and limit length
+            search_clean = search.replace('\x00', '').strip()[:200]
+
+            if not search_clean:
+                st.warning("Invalid search input")
+            else:
+                # Escape SQL wildcard characters for LIKE search
+                # This prevents wildcard injection while allowing legitimate searches
+                search_escaped = (search_clean
+                    .replace('\\', '\\\\')
+                    .replace('%', '\\%')
+                    .replace('_', '\\_'))
+
+                # Use parameterized pattern - SQLAlchemy handles the rest
+                search_pattern = f"%{search_escaped}%"
+
+                # SQLAlchemy properly parameterizes these values
+                query = query.filter(
+                    (Trade.market_title.ilike(search_pattern, escape='\\')) |
+                    (Trade.wallet_address.ilike(search_pattern, escape='\\'))
+                )
 
         trades = query.order_by(desc(Trade.timestamp)).limit(limit).all()
 
