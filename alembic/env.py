@@ -4,7 +4,7 @@ import time
 import logging
 from pathlib import Path
 
-from sqlalchemy import engine_from_config, create_engine
+from sqlalchemy import engine_from_config, create_engine, inspect, text
 from sqlalchemy import pool
 
 from alembic import context
@@ -17,6 +17,9 @@ from database.models import Base
 from config import config as app_config
 
 logger = logging.getLogger('alembic.env')
+
+# The latest migration revision - update this when adding new migrations
+LATEST_REVISION = 'add_suspicious_wins'
 
 # this is the Alembic Config object, which provides
 # access to the values within the .ini file in use.
@@ -153,7 +156,83 @@ def run_migrations_online() -> None:
         raise last_error
 
 
+def check_and_stamp_if_needed() -> bool:
+    """
+    Check if core tables exist but alembic_version is missing/empty.
+    If so, stamp the database to avoid DuplicateTable errors.
+
+    Returns True if migrations should be skipped (already stamped).
+    """
+    connect_args = {}
+    if 'postgresql' in database_url:
+        connect_args = {
+            'connect_timeout': 30,
+            'keepalives': 1,
+            'keepalives_idle': 30,
+            'keepalives_interval': 10,
+            'keepalives_count': 5,
+        }
+
+    try:
+        engine = create_engine(
+            database_url,
+            poolclass=pool.NullPool,
+            connect_args=connect_args,
+        )
+
+        with engine.connect() as conn:
+            inspector = inspect(engine)
+            existing_tables = inspector.get_table_names()
+
+            # Check if core tables exist
+            core_tables = ['markets', 'trades', 'alerts', 'wallet_metrics']
+            tables_exist = all(t in existing_tables for t in core_tables)
+
+            if not tables_exist:
+                # No existing tables, run migrations normally
+                logger.info("Core tables don't exist, will run migrations normally")
+                return False
+
+            # Check if alembic_version table exists and has a revision
+            if 'alembic_version' in existing_tables:
+                result = conn.execute(text("SELECT version_num FROM alembic_version"))
+                version = result.scalar()
+                if version:
+                    logger.info(f"Database already at revision: {version}")
+                    return False  # Already has a version, let alembic handle it
+
+            # Tables exist but no alembic_version - need to stamp
+            logger.warning(
+                "Core tables exist but no alembic_version found. "
+                "Stamping database to avoid DuplicateTable errors..."
+            )
+
+            # Create alembic_version table if needed
+            if 'alembic_version' not in existing_tables:
+                conn.execute(text(
+                    "CREATE TABLE alembic_version (version_num VARCHAR(32) NOT NULL PRIMARY KEY)"
+                ))
+                conn.commit()
+
+            # Stamp with the latest revision
+            conn.execute(text(
+                f"INSERT INTO alembic_version (version_num) VALUES ('{LATEST_REVISION}')"
+            ))
+            conn.commit()
+
+            logger.info(f"Database stamped with revision: {LATEST_REVISION}")
+            return True
+
+    except Exception as e:
+        logger.warning(f"Could not check/stamp database: {e}")
+        return False
+
+
 if context.is_offline_mode():
     run_migrations_offline()
 else:
-    run_migrations_online()
+    # Check if we need to stamp the database first
+    if not check_and_stamp_if_needed():
+        run_migrations_online()
+    else:
+        logger.info("Skipping migrations - database already stamped")
