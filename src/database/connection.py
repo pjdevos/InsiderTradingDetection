@@ -39,12 +39,29 @@ def init_db(database_url: str = None, echo: bool = False):
 
     database_url = database_url or config.DATABASE_URL
 
+    # Ensure SSL mode for Railway connections
+    if database_url and 'railway' in database_url.lower() and 'sslmode' not in database_url:
+        separator = '&' if '?' in database_url else '?'
+        database_url = f"{database_url}{separator}sslmode=require"
+        logger.info("Added sslmode=require for Railway connection")
+
     logger.info("Initializing database connection...")
 
     # Retry loop for Railway private networking DNS resolution
     last_error = None
     for attempt in range(MAX_RETRIES):
         try:
+            # Connection arguments for PostgreSQL reliability
+            connect_args = {}
+            if 'postgresql' in database_url:
+                connect_args = {
+                    'connect_timeout': 30,
+                    'keepalives': 1,
+                    'keepalives_idle': 30,
+                    'keepalives_interval': 10,
+                    'keepalives_count': 5,
+                }
+
             # Create engine
             _engine = create_engine(
                 database_url,
@@ -53,6 +70,7 @@ def init_db(database_url: str = None, echo: bool = False):
                 pool_size=10,
                 max_overflow=20,
                 pool_recycle=3600,  # Recycle connections after 1 hour
+                connect_args=connect_args,
             )
 
             # Add connection pool logging (only on first successful attempt)
@@ -81,7 +99,10 @@ def init_db(database_url: str = None, echo: bool = False):
             if "could not translate host name" in error_msg or \
                "name or service not known" in error_msg or \
                "connection refused" in error_msg or \
-               "timeout" in error_msg:
+               "timeout" in error_msg or \
+               "server closed the connection unexpectedly" in error_msg or \
+               "connection reset" in error_msg or \
+               "broken pipe" in error_msg:
 
                 delay = INITIAL_DELAY * (2 ** attempt)  # Exponential backoff
                 delay = min(delay, 30)  # Cap at 30 seconds
