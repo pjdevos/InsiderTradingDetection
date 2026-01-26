@@ -3,16 +3,61 @@ Email alert system for sending suspicious trade notifications
 """
 import logging
 import smtplib
+import socket
+import ssl
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
 from typing import Dict, Optional, List
 from datetime import datetime, timezone
 
-from config import config
+from config import config, sanitize_error_message
 from alerts.credential_validator import CredentialValidator, CredentialValidationError
 from alerts.templates import email_alert_html
 
 logger = logging.getLogger(__name__)
+
+
+def _sanitize_smtp_error(error: Exception) -> str:
+    """
+    Sanitize SMTP error messages to remove any potential credential exposure.
+
+    SMTP errors can sometimes include username/password in their messages,
+    especially with authentication failures. This function removes sensitive
+    information before logging.
+
+    Args:
+        error: The SMTP exception to sanitize
+
+    Returns:
+        Sanitized error message safe for logging
+    """
+    error_str = str(error)
+
+    # Remove any password-like content
+    import re
+
+    # Pattern to match common credential exposures in SMTP errors
+    # - Base64 encoded credentials
+    # - Plain text passwords after common keywords
+    # - Authentication strings
+    patterns = [
+        (r'password[=:\s]+\S+', 'password=***'),
+        (r'auth[=:\s]+\S+', 'auth=***'),
+        (r'credentials?[=:\s]+\S+', 'credentials=***'),
+        (r'token[=:\s]+\S+', 'token=***'),
+        (r'[A-Za-z0-9+/]{20,}={0,2}', '[BASE64_REDACTED]'),  # Base64 strings
+        (r'b\'[^\']+\'', "b'***'"),  # Python bytes
+        (r'b"[^"]+"', 'b"***"'),  # Python bytes
+    ]
+
+    for pattern, replacement in patterns:
+        error_str = re.sub(pattern, replacement, error_str, flags=re.IGNORECASE)
+
+    # Truncate long messages
+    if len(error_str) > 500:
+        error_str = error_str[:500] + '... [truncated]'
+
+    return error_str
 
 
 class EmailAlertService:
@@ -178,13 +223,99 @@ class EmailAlertService:
             return True
 
         except smtplib.SMTPAuthenticationError as e:
-            logger.error(f"SMTP authentication failed: {e}")
+            # CRITICAL: Do not log the raw error - it may contain credentials
+            sanitized_error = _sanitize_smtp_error(e)
+            logger.error(
+                f"SMTP authentication failed. Check SMTP_USERNAME and SMTP_PASSWORD. "
+                f"Server: {self.smtp_server}. Error: {sanitized_error}"
+            )
             return False
+
+        except smtplib.SMTPRecipientsRefused as e:
+            # Recipients refused - log which ones without exposing full error
+            refused = list(e.recipients.keys()) if hasattr(e, 'recipients') else ['unknown']
+            logger.error(
+                f"SMTP recipients refused: {refused}. "
+                f"Check EMAIL_TO configuration."
+            )
+            return False
+
+        except smtplib.SMTPSenderRefused as e:
+            # Sender refused
+            logger.error(
+                f"SMTP sender refused: {self.from_email}. "
+                f"Check EMAIL_FROM configuration. Error code: {e.smtp_code if hasattr(e, 'smtp_code') else 'unknown'}"
+            )
+            return False
+
+        except smtplib.SMTPDataError as e:
+            # Data transmission error
+            logger.error(
+                f"SMTP data error (code {e.smtp_code if hasattr(e, 'smtp_code') else 'unknown'}). "
+                f"Message may have been rejected by server."
+            )
+            return False
+
+        except smtplib.SMTPConnectError as e:
+            # Connection error
+            logger.error(
+                f"Failed to connect to SMTP server {self.smtp_server}:{self.smtp_port}. "
+                f"Check server address and port."
+            )
+            return False
+
+        except smtplib.SMTPServerDisconnected as e:
+            # Server disconnected unexpectedly
+            logger.error(
+                f"SMTP server {self.smtp_server} disconnected unexpectedly. "
+                f"Check network connection and server status."
+            )
+            return False
+
         except smtplib.SMTPException as e:
-            logger.error(f"SMTP error sending email: {e}")
+            # Other SMTP errors - sanitize before logging
+            sanitized_error = _sanitize_smtp_error(e)
+            logger.error(f"SMTP error sending email: {sanitized_error}")
             return False
+
+        except ssl.SSLError as e:
+            # SSL/TLS errors
+            logger.error(
+                f"SSL/TLS error connecting to {self.smtp_server}:{self.smtp_port}. "
+                f"Check server supports STARTTLS on port {self.smtp_port}."
+            )
+            return False
+
+        except socket.timeout as e:
+            # Socket timeout
+            logger.error(
+                f"Timeout connecting to SMTP server {self.smtp_server}:{self.smtp_port}. "
+                f"Server may be slow or unreachable."
+            )
+            return False
+
+        except socket.gaierror as e:
+            # DNS resolution error
+            logger.error(
+                f"DNS resolution failed for SMTP server {self.smtp_server}. "
+                f"Check server address is correct."
+            )
+            return False
+
+        except ConnectionRefusedError as e:
+            # Connection refused
+            logger.error(
+                f"Connection refused by SMTP server {self.smtp_server}:{self.smtp_port}. "
+                f"Check server address and port."
+            )
+            return False
+
         except Exception as e:
-            logger.error(f"Error sending email alert: {e}")
+            # Catch-all for unexpected errors - sanitize to be safe
+            sanitized_error = sanitize_error_message(e)
+            logger.error(
+                f"Unexpected error sending email alert: {type(e).__name__}: {sanitized_error}"
+            )
             return False
 
     def _generate_text_fallback(self, trade_data: Dict, scoring_result: Dict) -> str:
@@ -351,8 +482,29 @@ This is an automated test message.
             logger.info(f"Sent test email to {recipient}")
             return True
 
+        except smtplib.SMTPAuthenticationError as e:
+            sanitized_error = _sanitize_smtp_error(e)
+            logger.error(
+                f"SMTP authentication failed for test email. "
+                f"Server: {self.smtp_server}. Error: {sanitized_error}"
+            )
+            return False
+
+        except smtplib.SMTPException as e:
+            sanitized_error = _sanitize_smtp_error(e)
+            logger.error(f"SMTP error sending test email: {sanitized_error}")
+            return False
+
+        except (socket.timeout, socket.gaierror, ConnectionRefusedError) as e:
+            logger.error(
+                f"Network error sending test email to {self.smtp_server}:{self.smtp_port}: "
+                f"{type(e).__name__}"
+            )
+            return False
+
         except Exception as e:
-            logger.error(f"Error sending test email: {e}")
+            sanitized_error = sanitize_error_message(e)
+            logger.error(f"Error sending test email: {type(e).__name__}: {sanitized_error}")
             return False
 
     def send_daily_summary(self, stats: Dict, to_email: str = None) -> bool:
@@ -400,8 +552,29 @@ This is an automated test message.
             logger.info(f"Sent daily summary email to {recipient}")
             return True
 
+        except smtplib.SMTPAuthenticationError as e:
+            sanitized_error = _sanitize_smtp_error(e)
+            logger.error(
+                f"SMTP authentication failed for summary email. "
+                f"Server: {self.smtp_server}. Error: {sanitized_error}"
+            )
+            return False
+
+        except smtplib.SMTPException as e:
+            sanitized_error = _sanitize_smtp_error(e)
+            logger.error(f"SMTP error sending summary email: {sanitized_error}")
+            return False
+
+        except (socket.timeout, socket.gaierror, ConnectionRefusedError) as e:
+            logger.error(
+                f"Network error sending summary email to {self.smtp_server}:{self.smtp_port}: "
+                f"{type(e).__name__}"
+            )
+            return False
+
         except Exception as e:
-            logger.error(f"Error sending summary email: {e}")
+            sanitized_error = sanitize_error_message(e)
+            logger.error(f"Error sending summary email: {type(e).__name__}: {sanitized_error}")
             return False
 
     def _generate_summary_text(self, stats: Dict) -> str:

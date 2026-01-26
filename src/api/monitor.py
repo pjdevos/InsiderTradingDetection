@@ -9,7 +9,8 @@ from typing import Dict, List, Optional, Callable
 from api.client import PolymarketAPIClient
 from config import config
 from database.storage import DataStorageService
-from database.connection import init_db
+from database.connection import init_db, get_db_session
+from database.repository import CheckpointRepository, FailedTradeRepository
 from analysis.scoring import SuspicionScorer
 from alerts import send_trade_alert, send_email_alert
 
@@ -19,13 +20,17 @@ logger = logging.getLogger(__name__)
 
 class RealTimeTradeMonitor:
     """
-    Continuously monitor Polymarket for large trades on geopolitical markets
+    Continuously monitor Polymarket for large trades on geopolitical markets.
+
+    Uses database-backed checkpoints to prevent race conditions and ensure
+    no trades are missed across restarts or failures.
     """
 
     def __init__(self,
                  api_client: PolymarketAPIClient,
                  min_bet_size: float = None,
-                 interval_seconds: int = None):
+                 interval_seconds: int = None,
+                 monitor_name: str = 'default'):
         """
         Initialize trade monitor
 
@@ -33,18 +38,145 @@ class RealTimeTradeMonitor:
             api_client: Polymarket API client instance
             min_bet_size: Minimum bet size to track (USD)
             interval_seconds: Polling interval
+            monitor_name: Name for checkpoint persistence (allows multiple monitors)
         """
         self.api = api_client
         self.min_bet_size = min_bet_size or config.MIN_BET_SIZE_USD
         self.interval_seconds = interval_seconds or config.POLL_INTERVAL_SECONDS
+        self.monitor_name = monitor_name
         self.last_check_time = datetime.now(timezone.utc)
         self.running = False
         self.trade_callbacks = []
 
+        # Try to load checkpoint from database
+        self._load_checkpoint()
+
         logger.info(
             f"RealTimeTradeMonitor initialized: "
-            f"min_bet=${self.min_bet_size}, interval={self.interval_seconds}s"
+            f"min_bet=${self.min_bet_size}, interval={self.interval_seconds}s, "
+            f"monitor={self.monitor_name}, checkpoint={self.last_check_time.isoformat()}"
         )
+
+    def _load_checkpoint(self):
+        """Load checkpoint from database if available"""
+        try:
+            with get_db_session() as session:
+                checkpoint = CheckpointRepository.get_checkpoint(
+                    session, self.monitor_name
+                )
+                if checkpoint:
+                    self.last_check_time = checkpoint.last_checkpoint_time
+                    logger.info(
+                        f"Loaded checkpoint for {self.monitor_name}: "
+                        f"{checkpoint.last_checkpoint_time.isoformat()}, "
+                        f"total processed: {checkpoint.total_trades_processed}"
+                    )
+                else:
+                    logger.info(
+                        f"No checkpoint found for {self.monitor_name}, "
+                        f"starting from now"
+                    )
+        except Exception as e:
+            logger.warning(
+                f"Could not load checkpoint, starting from now: {e}"
+            )
+
+    def _save_checkpoint(self, checkpoint_time: datetime, trades_processed: int = 0):
+        """Save checkpoint to database"""
+        try:
+            with get_db_session() as session:
+                CheckpointRepository.save_checkpoint(
+                    session,
+                    checkpoint_time=checkpoint_time,
+                    monitor_name=self.monitor_name,
+                    trades_processed=trades_processed
+                )
+                session.commit()
+        except Exception as e:
+            logger.error(f"Failed to save checkpoint: {e}")
+
+    def _record_failure(self, reason: str):
+        """Record processing failure in database"""
+        try:
+            with get_db_session() as session:
+                CheckpointRepository.record_failure(
+                    session,
+                    monitor_name=self.monitor_name,
+                    reason=reason
+                )
+                session.commit()
+        except Exception as e:
+            logger.error(f"Failed to record failure: {e}")
+
+    def _add_to_dead_letter_queue(self, trade: Dict, reason: str):
+        """Add a failed trade to the dead-letter queue"""
+        try:
+            tx_hash = trade.get('transaction_hash') or trade.get('hash') or 'unknown'
+            if tx_hash == 'unknown':
+                logger.warning("Cannot add trade to dead-letter queue: no transaction hash")
+                return
+
+            with get_db_session() as session:
+                FailedTradeRepository.add_failed_trade(
+                    session,
+                    tx_hash=tx_hash,
+                    trade_data=trade,
+                    reason=reason
+                )
+                session.commit()
+        except Exception as e:
+            logger.error(f"Failed to add trade to dead-letter queue: {e}")
+
+    def process_dead_letter_queue(self, limit: int = 10) -> int:
+        """
+        Process trades from the dead-letter queue.
+
+        Args:
+            limit: Maximum number of trades to process
+
+        Returns:
+            Number of trades successfully processed
+        """
+        processed = 0
+        try:
+            with get_db_session() as session:
+                failed_trades = FailedTradeRepository.get_pending_retries(session, limit)
+
+                if not failed_trades:
+                    return 0
+
+                logger.info(f"Processing {len(failed_trades)} trades from dead-letter queue")
+
+                for failed_trade in failed_trades:
+                    try:
+                        # Retry processing the trade
+                        trade_data = failed_trade.trade_data
+                        self.process_trade(trade_data)
+
+                        # If successful, mark as resolved
+                        FailedTradeRepository.mark_resolved(
+                            session,
+                            failed_trade.id,
+                            notes="Successfully processed on retry"
+                        )
+                        processed += 1
+                        logger.info(
+                            f"Successfully processed failed trade {failed_trade.transaction_hash[:10]}..."
+                        )
+
+                    except Exception as e:
+                        # Increment retry count and schedule next retry
+                        FailedTradeRepository.increment_retry(session, failed_trade.id)
+                        logger.warning(
+                            f"Retry failed for trade {failed_trade.transaction_hash[:10]}...: {e}"
+                        )
+
+                session.commit()
+
+        except Exception as e:
+            logger.error(f"Error processing dead-letter queue: {e}")
+
+        return processed
 
     def register_callback(self, callback: Callable[[Dict], None]):
         """
@@ -115,21 +247,26 @@ class RealTimeTradeMonitor:
                     # Continue processing other trades, but don't update timestamp
                     # This ensures failed trades will be retried on next poll
 
-            # Only update last_check_time if ALL trades were processed successfully
+            # Only update checkpoint if ALL trades were processed successfully
             # This ensures failed trades are retried on the next poll (with overlap buffer)
             if failed_count == 0:
                 self.last_check_time = poll_start_time
+                # Save checkpoint to database for persistence across restarts
+                self._save_checkpoint(poll_start_time, processed_count)
                 if large_trades:
-                    logger.info(f"Successfully processed {processed_count} trades, updating checkpoint to {poll_start_time.isoformat()}")
+                    logger.info(f"Successfully processed {processed_count} trades, checkpoint saved: {poll_start_time.isoformat()}")
             else:
                 logger.warning(
                     f"Processed {processed_count}/{len(large_trades)} trades successfully, but {failed_count} failed. "
                     f"Checkpoint NOT updated - failed trades will be retried on next poll."
                 )
+                # Record failure in database
+                self._record_failure(f"Failed to process {failed_count} trades")
 
         except Exception as e:
             # Don't update last_check_time on failure - trades will be refetched
             logger.error(f"Error in polling loop: {e}", exc_info=True)
+            self._record_failure(str(e))
 
     def process_trade(self, trade: Dict):
         """
@@ -325,6 +462,10 @@ class RealTimeTradeMonitor:
 
         except Exception as e:
             logger.error(f"Error processing trade: {e}", exc_info=True)
+            # Add to dead-letter queue for later retry
+            self._add_to_dead_letter_queue(trade, str(e))
+            # Re-raise to signal failure to poll_recent_trades
+            raise
 
     def start(self):
         """

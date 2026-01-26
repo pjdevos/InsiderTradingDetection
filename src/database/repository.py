@@ -1,5 +1,8 @@
 """
 Data repository layer for database operations
+
+All methods validate inputs before executing queries to prevent
+potential security issues and ensure data integrity.
 """
 import logging
 from datetime import datetime, timezone, timedelta
@@ -8,8 +11,9 @@ from sqlalchemy import func, and_, or_, desc
 from sqlalchemy.orm import Session
 from sqlalchemy.exc import IntegrityError
 
-from database.models import Trade, Market, WalletMetrics, Alert
+from database.models import Trade, Market, WalletMetrics, Alert, MonitorCheckpoint, FailedTrade
 from database.connection import get_db_session
+from database.validators import DatabaseInputValidator, ValidationError
 
 logger = logging.getLogger(__name__)
 
@@ -54,6 +58,8 @@ class TradeRepository:
     @staticmethod
     def get_trade_by_tx_hash(session: Session, tx_hash: str) -> Optional[Trade]:
         """Get trade by transaction hash"""
+        # Validate input
+        tx_hash = DatabaseInputValidator.validate_transaction_hash(tx_hash)
         return session.query(Trade).filter(Trade.transaction_hash == tx_hash).first()
 
     @staticmethod
@@ -63,6 +69,10 @@ class TradeRepository:
         limit: int = 100
     ) -> List[Trade]:
         """Get all trades for a wallet"""
+        # Validate inputs
+        wallet_address = DatabaseInputValidator.validate_wallet_address(wallet_address)
+        limit = DatabaseInputValidator.validate_limit(limit)
+
         return session.query(Trade)\
             .filter(Trade.wallet_address == wallet_address)\
             .order_by(Trade.timestamp.desc())\
@@ -88,6 +98,11 @@ class TradeRepository:
         Returns:
             List of Trade objects
         """
+        # Validate inputs
+        hours = DatabaseInputValidator.validate_hours(hours)
+        limit = DatabaseInputValidator.validate_limit(limit)
+        min_bet_size = DatabaseInputValidator.validate_optional_bet_size(min_bet_size)
+
         start_time = datetime.now(timezone.utc) - timedelta(hours=hours)
 
         query = session.query(Trade)\
@@ -105,6 +120,10 @@ class TradeRepository:
         limit: int = 100
     ) -> List[Trade]:
         """Get trades with high suspicion scores"""
+        # Validate inputs
+        min_score = DatabaseInputValidator.validate_score(min_score)
+        limit = DatabaseInputValidator.validate_limit(limit)
+
         return session.query(Trade)\
             .filter(Trade.suspicion_score >= min_score)\
             .order_by(Trade.suspicion_score.desc(), Trade.timestamp.desc())\
@@ -120,6 +139,11 @@ class TradeRepository:
     ) -> bool:
         """Update suspicion score for a trade"""
         try:
+            # Validate inputs
+            trade_id = DatabaseInputValidator.validate_positive_int(trade_id, "trade_id")
+            score = DatabaseInputValidator.validate_score(score)
+            alert_level = DatabaseInputValidator.validate_optional_alert_level(alert_level)
+
             trade = session.query(Trade).filter(Trade.id == trade_id).first()
             if trade:
                 trade.suspicion_score = score
@@ -129,6 +153,9 @@ class TradeRepository:
                 logger.info(f"Updated suspicion score for trade {trade_id}: {score}")
                 return True
             return False
+        except ValidationError as e:
+            logger.error(f"Validation error updating suspicion score: {e}")
+            return False
         except Exception as e:
             logger.error(f"Error updating suspicion score: {e}")
             return False
@@ -136,6 +163,9 @@ class TradeRepository:
     @staticmethod
     def get_trade_statistics(session: Session, hours: int = 24) -> Dict:
         """Get trade statistics for the last N hours"""
+        # Validate inputs
+        hours = DatabaseInputValidator.validate_hours(hours)
+
         start_time = datetime.now(timezone.utc) - timedelta(hours=hours)
 
         total_trades = session.query(func.count(Trade.id))\
@@ -201,6 +231,8 @@ class MarketRepository:
     @staticmethod
     def get_market(session: Session, market_id: str) -> Optional[Market]:
         """Get market by ID"""
+        # Validate input
+        market_id = DatabaseInputValidator.validate_market_id(market_id)
         return session.query(Market).filter(Market.market_id == market_id).first()
 
     @staticmethod
@@ -210,6 +242,9 @@ class MarketRepository:
         limit: int = 100
     ) -> List[Market]:
         """Get geopolitical markets"""
+        # Validate inputs
+        limit = DatabaseInputValidator.validate_limit(limit)
+
         query = session.query(Market)\
             .filter(Market.is_geopolitical == True)
 
@@ -245,6 +280,9 @@ class WalletRepository:
         wallet_address: str
     ) -> WalletMetrics:
         """Get existing wallet metrics or create new"""
+        # Validate input
+        wallet_address = DatabaseInputValidator.validate_wallet_address(wallet_address)
+
         metrics = session.query(WalletMetrics)\
             .filter(WalletMetrics.wallet_address == wallet_address)\
             .first()
@@ -269,6 +307,9 @@ class WalletRepository:
         Returns:
             Updated WalletMetrics object
         """
+        # Validate input (also validated in get_or_create_wallet_metrics)
+        wallet_address = DatabaseInputValidator.validate_wallet_address(wallet_address)
+
         metrics = WalletRepository.get_or_create_wallet_metrics(session, wallet_address)
 
         # Get all trades for this wallet
@@ -336,6 +377,10 @@ class WalletRepository:
         Returns:
             List of WalletMetrics objects
         """
+        # Validate inputs
+        order_by = DatabaseInputValidator.validate_order_by(order_by)
+        limit = DatabaseInputValidator.validate_limit(limit)
+
         query = session.query(WalletMetrics)
 
         if order_by == 'volume':
@@ -356,6 +401,10 @@ class WalletRepository:
         limit: int = 50
     ) -> List[WalletMetrics]:
         """Get wallets with suspicious patterns"""
+        # Validate inputs
+        min_flags = DatabaseInputValidator.validate_positive_int(min_flags, "min_flags", allow_zero=True)
+        limit = DatabaseInputValidator.validate_limit(limit)
+
         return session.query(WalletMetrics)\
             .filter(WalletMetrics.suspicion_flags >= min_flags)\
             .order_by(WalletMetrics.suspicion_flags.desc())\
@@ -383,6 +432,11 @@ class AlertRepository:
         limit: int = 100
     ) -> List[Alert]:
         """Get recent alerts"""
+        # Validate inputs
+        hours = DatabaseInputValidator.validate_hours(hours)
+        level = DatabaseInputValidator.validate_optional_alert_level(level)
+        limit = DatabaseInputValidator.validate_limit(limit)
+
         start_time = datetime.now(timezone.utc) - timedelta(hours=hours)
 
         query = session.query(Alert)\
@@ -396,6 +450,9 @@ class AlertRepository:
     @staticmethod
     def get_unreviewed_alerts(session: Session, limit: int = 100) -> List[Alert]:
         """Get alerts that haven't been reviewed"""
+        # Validate input
+        limit = DatabaseInputValidator.validate_limit(limit)
+
         return session.query(Alert)\
             .filter(Alert.status == 'NEW')\
             .order_by(Alert.suspicion_score.desc(), Alert.created_at.desc())\
@@ -411,6 +468,11 @@ class AlertRepository:
     ) -> bool:
         """Mark an alert as reviewed"""
         try:
+            # Validate inputs
+            alert_id = DatabaseInputValidator.validate_positive_int(alert_id, "alert_id")
+            reviewed_by = DatabaseInputValidator.validate_string(reviewed_by, "reviewed_by", max_length=100)
+            notes = DatabaseInputValidator.validate_optional_string(notes, "notes", max_length=5000)
+
             alert = session.query(Alert).filter(Alert.id == alert_id).first()
             if alert:
                 alert.status = 'REVIEWED'
@@ -420,6 +482,9 @@ class AlertRepository:
                     alert.notes = notes
                 session.flush()
                 return True
+            return False
+        except ValidationError as e:
+            logger.error(f"Validation error marking alert reviewed: {e}")
             return False
         except Exception as e:
             logger.error(f"Error marking alert reviewed: {e}")
@@ -445,6 +510,9 @@ class AlertRepository:
             True if updated successfully
         """
         try:
+            # Validate input
+            alert_id = DatabaseInputValidator.validate_positive_int(alert_id, "alert_id")
+
             alert = session.query(Alert).filter(Alert.id == alert_id).first()
             if alert:
                 if telegram_sent is not None:
@@ -454,6 +522,9 @@ class AlertRepository:
                 session.flush()
                 logger.debug(f"Updated notification status for alert {alert_id}")
                 return True
+            return False
+        except ValidationError as e:
+            logger.error(f"Validation error updating notification status: {e}")
             return False
         except Exception as e:
             logger.error(f"Error updating notification status: {e}")
@@ -472,7 +543,332 @@ class AlertRepository:
             Alert object or None
         """
         try:
+            # Validate input
+            trade_id = DatabaseInputValidator.validate_positive_int(trade_id, "trade_id")
             return session.query(Alert).filter(Alert.trade_id == trade_id).first()
+        except ValidationError as e:
+            logger.error(f"Validation error getting alert by trade ID: {e}")
+            return None
         except Exception as e:
             logger.error(f"Error getting alert by trade ID: {e}")
             return None
+
+
+class CheckpointRepository:
+    """Repository for monitor checkpoint operations (race condition prevention)"""
+
+    @staticmethod
+    def get_checkpoint(
+        session: Session,
+        monitor_name: str = 'default'
+    ) -> Optional[MonitorCheckpoint]:
+        """
+        Get the current checkpoint for a monitor.
+
+        Args:
+            session: Database session
+            monitor_name: Name of the monitor
+
+        Returns:
+            MonitorCheckpoint object or None if not found
+        """
+        try:
+            monitor_name = DatabaseInputValidator.validate_string(
+                monitor_name, "monitor_name", max_length=100
+            )
+            return session.query(MonitorCheckpoint)\
+                .filter(MonitorCheckpoint.monitor_name == monitor_name)\
+                .first()
+        except ValidationError as e:
+            logger.error(f"Validation error getting checkpoint: {e}")
+            return None
+        except Exception as e:
+            logger.error(f"Error getting checkpoint: {e}")
+            return None
+
+    @staticmethod
+    def save_checkpoint(
+        session: Session,
+        checkpoint_time: datetime,
+        monitor_name: str = 'default',
+        trades_processed: int = 0
+    ) -> Optional[MonitorCheckpoint]:
+        """
+        Save or update checkpoint after successful processing.
+
+        Args:
+            session: Database session
+            checkpoint_time: Time to save as checkpoint
+            monitor_name: Name of the monitor
+            trades_processed: Number of trades processed in this batch
+
+        Returns:
+            Updated MonitorCheckpoint object or None on error
+        """
+        try:
+            # Validate inputs
+            monitor_name = DatabaseInputValidator.validate_string(
+                monitor_name, "monitor_name", max_length=100
+            )
+            checkpoint_time = DatabaseInputValidator.validate_timestamp(checkpoint_time)
+            trades_processed = DatabaseInputValidator.validate_positive_int(
+                trades_processed, "trades_processed", allow_zero=True
+            )
+
+            # Get or create checkpoint
+            checkpoint = session.query(MonitorCheckpoint)\
+                .filter(MonitorCheckpoint.monitor_name == monitor_name)\
+                .first()
+
+            if checkpoint:
+                # Update existing
+                checkpoint.last_checkpoint_time = checkpoint_time
+                checkpoint.total_trades_processed += trades_processed
+            else:
+                # Create new
+                checkpoint = MonitorCheckpoint(
+                    monitor_name=monitor_name,
+                    last_checkpoint_time=checkpoint_time,
+                    total_trades_processed=trades_processed
+                )
+                session.add(checkpoint)
+
+            session.flush()
+            logger.debug(
+                f"Saved checkpoint for {monitor_name}: {checkpoint_time.isoformat()}"
+            )
+            return checkpoint
+
+        except ValidationError as e:
+            logger.error(f"Validation error saving checkpoint: {e}")
+            return None
+        except Exception as e:
+            logger.error(f"Error saving checkpoint: {e}")
+            return None
+
+    @staticmethod
+    def record_failure(
+        session: Session,
+        monitor_name: str = 'default',
+        reason: str = None
+    ) -> bool:
+        """
+        Record a processing failure without updating the checkpoint time.
+
+        Args:
+            session: Database session
+            monitor_name: Name of the monitor
+            reason: Failure reason
+
+        Returns:
+            True if recorded successfully
+        """
+        try:
+            monitor_name = DatabaseInputValidator.validate_string(
+                monitor_name, "monitor_name", max_length=100
+            )
+            reason = DatabaseInputValidator.validate_optional_string(
+                reason, "reason", max_length=5000
+            )
+
+            checkpoint = session.query(MonitorCheckpoint)\
+                .filter(MonitorCheckpoint.monitor_name == monitor_name)\
+                .first()
+
+            if checkpoint:
+                checkpoint.total_failures += 1
+                checkpoint.last_failure_time = datetime.now(timezone.utc)
+                checkpoint.last_failure_reason = reason
+                session.flush()
+                return True
+
+            return False
+
+        except Exception as e:
+            logger.error(f"Error recording failure: {e}")
+            return False
+
+
+class FailedTradeRepository:
+    """Repository for failed trade dead-letter queue operations"""
+
+    @staticmethod
+    def add_failed_trade(
+        session: Session,
+        tx_hash: str,
+        trade_data: Dict,
+        reason: str
+    ) -> Optional[FailedTrade]:
+        """
+        Add a trade to the failed trades queue.
+
+        Args:
+            session: Database session
+            tx_hash: Transaction hash
+            trade_data: Original trade data
+            reason: Failure reason
+
+        Returns:
+            FailedTrade object or None on error
+        """
+        try:
+            # Validate inputs
+            tx_hash = DatabaseInputValidator.validate_transaction_hash(tx_hash)
+            reason = DatabaseInputValidator.validate_string(reason, "reason", max_length=5000)
+
+            # Check if already exists
+            existing = session.query(FailedTrade)\
+                .filter(FailedTrade.transaction_hash == tx_hash)\
+                .first()
+
+            if existing:
+                # Update existing
+                existing.failure_count += 1
+                existing.last_failure_at = datetime.now(timezone.utc)
+                existing.failure_reason = reason
+                session.flush()
+                return existing
+
+            # Create new
+            failed_trade = FailedTrade(
+                transaction_hash=tx_hash,
+                trade_data=trade_data,
+                failure_reason=reason
+            )
+            session.add(failed_trade)
+            session.flush()
+
+            logger.info(f"Added failed trade to queue: {tx_hash[:10]}...")
+            return failed_trade
+
+        except ValidationError as e:
+            logger.error(f"Validation error adding failed trade: {e}")
+            return None
+        except Exception as e:
+            logger.error(f"Error adding failed trade: {e}")
+            return None
+
+    @staticmethod
+    def get_pending_retries(
+        session: Session,
+        limit: int = 100
+    ) -> List[FailedTrade]:
+        """
+        Get trades ready for retry.
+
+        Args:
+            session: Database session
+            limit: Maximum number to return
+
+        Returns:
+            List of FailedTrade objects ready for retry
+        """
+        try:
+            limit = DatabaseInputValidator.validate_limit(limit)
+            now = datetime.now(timezone.utc)
+
+            return session.query(FailedTrade)\
+                .filter(FailedTrade.status == 'PENDING')\
+                .filter(FailedTrade.retry_count < FailedTrade.max_retries)\
+                .filter(
+                    (FailedTrade.next_retry_at == None) |
+                    (FailedTrade.next_retry_at <= now)
+                )\
+                .order_by(FailedTrade.first_failure_at)\
+                .limit(limit)\
+                .all()
+
+        except Exception as e:
+            logger.error(f"Error getting pending retries: {e}")
+            return []
+
+    @staticmethod
+    def mark_resolved(
+        session: Session,
+        failed_trade_id: int,
+        notes: str = None
+    ) -> bool:
+        """
+        Mark a failed trade as resolved.
+
+        Args:
+            session: Database session
+            failed_trade_id: ID of the failed trade
+            notes: Resolution notes
+
+        Returns:
+            True if marked successfully
+        """
+        try:
+            failed_trade_id = DatabaseInputValidator.validate_positive_int(
+                failed_trade_id, "failed_trade_id"
+            )
+            notes = DatabaseInputValidator.validate_optional_string(notes, "notes", max_length=5000)
+
+            failed_trade = session.query(FailedTrade)\
+                .filter(FailedTrade.id == failed_trade_id)\
+                .first()
+
+            if failed_trade:
+                failed_trade.status = 'RESOLVED'
+                failed_trade.resolved_at = datetime.now(timezone.utc)
+                failed_trade.resolution_notes = notes
+                session.flush()
+                return True
+
+            return False
+
+        except Exception as e:
+            logger.error(f"Error marking failed trade resolved: {e}")
+            return False
+
+    @staticmethod
+    def increment_retry(
+        session: Session,
+        failed_trade_id: int,
+        backoff_minutes: int = 5
+    ) -> bool:
+        """
+        Increment retry count and schedule next retry.
+
+        Args:
+            session: Database session
+            failed_trade_id: ID of the failed trade
+            backoff_minutes: Base backoff time in minutes
+
+        Returns:
+            True if updated successfully
+        """
+        try:
+            failed_trade_id = DatabaseInputValidator.validate_positive_int(
+                failed_trade_id, "failed_trade_id"
+            )
+
+            failed_trade = session.query(FailedTrade)\
+                .filter(FailedTrade.id == failed_trade_id)\
+                .first()
+
+            if failed_trade:
+                failed_trade.retry_count += 1
+                failed_trade.status = 'RETRYING'
+
+                # Exponential backoff: 5, 10, 20, 40, 80 minutes...
+                delay_minutes = backoff_minutes * (2 ** (failed_trade.retry_count - 1))
+                failed_trade.next_retry_at = datetime.now(timezone.utc) + timedelta(minutes=delay_minutes)
+
+                # If exceeded max retries, mark as abandoned
+                if failed_trade.retry_count >= failed_trade.max_retries:
+                    failed_trade.status = 'ABANDONED'
+                    logger.warning(
+                        f"Failed trade {failed_trade.transaction_hash[:10]}... "
+                        f"abandoned after {failed_trade.retry_count} retries"
+                    )
+
+                session.flush()
+                return True
+
+            return False
+
+        except Exception as e:
+            logger.error(f"Error incrementing retry: {e}")
+            return False

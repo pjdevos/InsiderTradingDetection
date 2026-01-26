@@ -369,6 +369,96 @@ class WalletWinHistory(Base):
         return f"<WalletWinHistory(wallet={self.wallet_address[:10]}..., result={self.trade_result}, pnl=${self.profit_loss_usd})>"
 
 
+class MonitorCheckpoint(Base):
+    """
+    Persistent checkpoint for trade monitoring to prevent race conditions.
+
+    This table stores the last successfully processed timestamp and
+    allows the monitor to resume from where it left off after restarts
+    or failures.
+    """
+    __tablename__ = 'monitor_checkpoints'
+
+    # Primary key - monitor name (allows multiple monitors)
+    monitor_name = Column(String(100), primary_key=True, default='default')
+
+    # Last successfully processed timestamp
+    last_checkpoint_time = Column(DateTime(timezone=True), nullable=False)
+
+    # Processing statistics
+    total_trades_processed = Column(Integer, default=0)
+    total_failures = Column(Integer, default=0)
+    last_failure_time = Column(DateTime(timezone=True))
+    last_failure_reason = Column(Text)
+
+    # Metadata
+    created_at = Column(
+        DateTime(timezone=True),
+        default=lambda: datetime.now(timezone.utc),
+        nullable=False
+    )
+    updated_at = Column(
+        DateTime(timezone=True),
+        default=lambda: datetime.now(timezone.utc),
+        onupdate=lambda: datetime.now(timezone.utc)
+    )
+
+    def __repr__(self):
+        return f"<MonitorCheckpoint(name={self.monitor_name}, last_checkpoint={self.last_checkpoint_time})>"
+
+
+class FailedTrade(Base):
+    """
+    Dead-letter queue for trades that failed processing.
+
+    Stores trades that couldn't be processed for later retry or investigation.
+    """
+    __tablename__ = 'failed_trades'
+
+    # Primary key
+    id = Column(Integer, primary_key=True, autoincrement=True)
+
+    # Trade identification
+    transaction_hash = Column(String(66), nullable=False, index=True)
+    trade_data = Column(JSON, nullable=False)  # Original trade data
+
+    # Failure details
+    failure_reason = Column(Text, nullable=False)
+    failure_count = Column(Integer, default=1)
+    first_failure_at = Column(
+        DateTime(timezone=True),
+        default=lambda: datetime.now(timezone.utc),
+        nullable=False
+    )
+    last_failure_at = Column(
+        DateTime(timezone=True),
+        default=lambda: datetime.now(timezone.utc),
+        nullable=False
+    )
+
+    # Retry tracking
+    retry_count = Column(Integer, default=0)
+    max_retries = Column(Integer, default=5)
+    next_retry_at = Column(DateTime(timezone=True))
+
+    # Status
+    status = Column(String(20), default='PENDING')  # PENDING, RETRYING, RESOLVED, ABANDONED
+
+    # Resolution
+    resolved_at = Column(DateTime(timezone=True))
+    resolution_notes = Column(Text)
+
+    # Indexes
+    __table_args__ = (
+        Index('idx_failed_trades_status', status),
+        Index('idx_failed_trades_next_retry', next_retry_at),
+        Index('idx_failed_trades_tx_hash', transaction_hash),
+    )
+
+    def __repr__(self):
+        return f"<FailedTrade(tx={self.transaction_hash[:10]}..., status={self.status}, failures={self.failure_count})>"
+
+
 class PizzINTData(Base):
     """
     Operational intelligence data from PizzINT

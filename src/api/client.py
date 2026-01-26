@@ -4,7 +4,7 @@ Polymarket API Client for fetching trade data and market information
 import requests
 import time
 from typing import Dict, List, Optional
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 import logging
 from web3 import Web3
 
@@ -12,6 +12,13 @@ from config import config
 
 
 logger = logging.getLogger(__name__)
+
+
+# Validation constants
+MIN_VALID_TIMESTAMP = datetime(2020, 1, 1, tzinfo=timezone.utc)  # Polymarket didn't exist before this
+MAX_FUTURE_DAYS = 365  # Can't query more than 1 year in future
+MAX_STRING_LENGTH = 1000  # Maximum length for string parameters
+MAX_MARKET_ID_LENGTH = 100  # Maximum market ID length
 
 
 class PolymarketAPIClient:
@@ -138,7 +145,99 @@ class PolymarketAPIClient:
         if not isinstance(market_id, str):
             raise ValueError(f"Market ID must be string, got {type(market_id)}")
 
+        market_id = market_id.strip()
+
+        if len(market_id) > MAX_MARKET_ID_LENGTH:
+            raise ValueError(f"Market ID exceeds maximum length of {MAX_MARKET_ID_LENGTH}")
+
+        # Allow alphanumeric, underscore, hyphen, or hex format (0x...)
+        if market_id.startswith('0x'):
+            # Validate hex format
+            try:
+                int(market_id, 16)
+            except ValueError:
+                raise ValueError(f"Market ID contains invalid hex characters: {market_id[:20]}...")
+        else:
+            # Check for invalid characters (allow alphanumeric, underscore, hyphen)
+            import re
+            if not re.match(r'^[a-zA-Z0-9_\-]+$', market_id):
+                raise ValueError(f"Market ID contains invalid characters")
+
         return market_id
+
+    def _validate_timestamp(self, timestamp: datetime, field_name: str = "timestamp") -> datetime:
+        """
+        Validate timestamp parameter
+
+        Args:
+            timestamp: Datetime to validate
+            field_name: Name of field for error messages
+
+        Returns:
+            Validated timezone-aware datetime
+
+        Raises:
+            ValueError: If timestamp is invalid
+        """
+        if timestamp is None:
+            raise ValueError(f"{field_name} cannot be None")
+
+        if not isinstance(timestamp, datetime):
+            raise ValueError(f"{field_name} must be datetime, got {type(timestamp)}")
+
+        # Ensure timezone-aware
+        if timestamp.tzinfo is None:
+            timestamp = timestamp.replace(tzinfo=timezone.utc)
+            logger.debug(f"Added UTC timezone to naive {field_name}")
+
+        # Validate reasonable range - not before Polymarket existed
+        if timestamp < MIN_VALID_TIMESTAMP:
+            raise ValueError(f"{field_name} is before Polymarket existed (2020)")
+
+        # Validate not too far in the future
+        max_future = datetime.now(timezone.utc) + timedelta(days=MAX_FUTURE_DAYS)
+        if timestamp > max_future:
+            raise ValueError(f"{field_name} is too far in the future (max {MAX_FUTURE_DAYS} days)")
+
+        return timestamp
+
+    def _validate_optional_timestamp(self, timestamp: Optional[datetime], field_name: str = "timestamp") -> Optional[datetime]:
+        """
+        Validate optional timestamp parameter
+
+        Args:
+            timestamp: Datetime to validate (can be None)
+            field_name: Name of field for error messages
+
+        Returns:
+            Validated datetime or None
+        """
+        if timestamp is None:
+            return None
+        return self._validate_timestamp(timestamp, field_name)
+
+    def _validate_string(self, value: str, field_name: str, max_length: int = MAX_STRING_LENGTH) -> str:
+        """
+        Validate string parameter
+
+        Args:
+            value: String to validate
+            field_name: Name of field for error messages
+            max_length: Maximum allowed length
+
+        Returns:
+            Validated string
+
+        Raises:
+            ValueError: If string is invalid
+        """
+        if not isinstance(value, str):
+            raise ValueError(f"{field_name} must be string, got {type(value)}")
+
+        if len(value) > max_length:
+            raise ValueError(f"{field_name} exceeds maximum length of {max_length}")
+
+        return value
 
     def _make_request(self, url: str, params: Dict = None, api_type: str = 'data') -> Optional[Dict]:
         """
@@ -269,6 +368,14 @@ class PolymarketAPIClient:
         if market_id:
             market_id = self._validate_market_id(market_id)
 
+        # Validate timestamps
+        start_time = self._validate_optional_timestamp(start_time, "start_time")
+        end_time = self._validate_optional_timestamp(end_time, "end_time")
+
+        # Validate time range makes sense
+        if start_time and end_time and start_time > end_time:
+            raise ValueError("start_time cannot be after end_time")
+
         url = f"{self.BASE_URLS['data']}/trades"
         params = {'limit': limit}
 
@@ -309,10 +416,13 @@ class PolymarketAPIClient:
             limit: Maximum number of fills
         """
         # Validate inputs
+        limit = self._validate_limit(limit)
         if maker:
             maker = self._validate_wallet_address(maker)
         if taker:
             taker = self._validate_wallet_address(taker)
+        if market:
+            market = self._validate_market_id(market)
 
         url = f"{self.BASE_URLS['clob']}/order-fills"
         params = {'limit': limit}
@@ -353,6 +463,8 @@ class PolymarketAPIClient:
         """
         # Validate inputs
         limit = self._validate_limit(limit)
+        if tag:
+            tag = self._validate_string(tag, "tag", max_length=100)
 
         url = f"{self.BASE_URLS['gamma']}/markets"
         params = {

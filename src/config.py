@@ -2,7 +2,10 @@
 Configuration management for Geopolitical Insider Trading Detection System
 """
 import os
+import re
+import logging
 from pathlib import Path
+from typing import Any, Optional
 from dotenv import load_dotenv
 
 # Load environment variables
@@ -10,6 +13,202 @@ load_dotenv()
 
 # Base directory
 BASE_DIR = Path(__file__).resolve().parent.parent
+
+
+class SecureString:
+    """
+    A string wrapper that masks sensitive values in logs and string representations.
+
+    This class ensures credentials are never accidentally exposed in:
+    - Log output
+    - Exception messages
+    - String formatting
+    - repr() calls
+    - Debug output
+    """
+
+    # Patterns that should never appear in logs (placeholder values)
+    PLACEHOLDER_PATTERNS = [
+        r'^your[_-]',
+        r'^xxx',
+        r'^placeholder',
+        r'^changeme',
+        r'^example',
+        r'^test[_-]?key',
+        r'^fake[_-]',
+        r'^dummy',
+    ]
+
+    def __init__(self, value: Optional[str], name: str = "credential"):
+        """
+        Initialize a secure string.
+
+        Args:
+            value: The actual credential value (can be None)
+            name: Name of the credential for error messages
+        """
+        self._value = value
+        self._name = name
+
+    @property
+    def value(self) -> Optional[str]:
+        """Get the actual value (use sparingly)"""
+        return self._value
+
+    def is_set(self) -> bool:
+        """Check if the value is set and not empty"""
+        return bool(self._value and self._value.strip())
+
+    def is_placeholder(self) -> bool:
+        """Check if the value appears to be a placeholder"""
+        if not self._value:
+            return False
+
+        lower_value = self._value.lower()
+        for pattern in self.PLACEHOLDER_PATTERNS:
+            if re.match(pattern, lower_value):
+                return True
+        return False
+
+    def masked(self, show_chars: int = 4) -> str:
+        """
+        Get a masked version of the value for logging.
+
+        Args:
+            show_chars: Number of characters to show at the end
+
+        Returns:
+            Masked string like '***abc1' or '[NOT SET]'
+        """
+        if not self._value:
+            return '[NOT SET]'
+
+        if len(self._value) <= show_chars:
+            return '*' * len(self._value)
+
+        return '*' * (len(self._value) - show_chars) + self._value[-show_chars:]
+
+    def __str__(self) -> str:
+        """Always return masked version"""
+        return self.masked()
+
+    def __repr__(self) -> str:
+        """Always return masked version"""
+        return f"SecureString({self._name}={self.masked()})"
+
+    def __bool__(self) -> bool:
+        """Allow truthiness check"""
+        return self.is_set()
+
+    def __eq__(self, other: Any) -> bool:
+        """Allow comparison (compare actual values)"""
+        if isinstance(other, SecureString):
+            return self._value == other._value
+        return self._value == other
+
+    def __hash__(self) -> int:
+        """Allow hashing"""
+        return hash(self._value)
+
+
+class CredentialMaskingFilter(logging.Filter):
+    """
+    Logging filter that masks sensitive information in log messages.
+
+    This filter scans log messages for patterns that look like credentials
+    and replaces them with masked versions.
+    """
+
+    # Patterns to mask in log messages
+    SENSITIVE_PATTERNS = [
+        # API keys (various formats)
+        (r'(api[_-]?key["\s:=]+)["\']?([a-zA-Z0-9_\-]{20,})["\']?', r'\1***MASKED***'),
+        # Bearer tokens
+        (r'(Bearer\s+)([a-zA-Z0-9_\-\.]+)', r'\1***MASKED***'),
+        # Passwords in URLs
+        (r'(://[^:]+:)([^@]+)(@)', r'\1***@'),
+        # Bot tokens
+        (r'(bot[_-]?token["\s:=]+)["\']?([0-9]+:[a-zA-Z0-9_\-]+)["\']?', r'\1***MASKED***'),
+        # Generic secrets
+        (r'(secret["\s:=]+)["\']?([a-zA-Z0-9_\-]{10,})["\']?', r'\1***MASKED***'),
+        # SMTP passwords
+        (r'(smtp[_-]?password["\s:=]+)["\']?([^\s"\']+)["\']?', r'\1***MASKED***'),
+    ]
+
+    def __init__(self):
+        super().__init__()
+        self._compiled_patterns = [
+            (re.compile(pattern, re.IGNORECASE), replacement)
+            for pattern, replacement in self.SENSITIVE_PATTERNS
+        ]
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        """Filter and mask sensitive data in log records"""
+        if isinstance(record.msg, str):
+            for pattern, replacement in self._compiled_patterns:
+                record.msg = pattern.sub(replacement, record.msg)
+
+        # Also check args if they're strings
+        if record.args:
+            new_args = []
+            for arg in record.args:
+                if isinstance(arg, str):
+                    masked_arg = arg
+                    for pattern, replacement in self._compiled_patterns:
+                        masked_arg = pattern.sub(replacement, masked_arg)
+                    new_args.append(masked_arg)
+                elif isinstance(arg, SecureString):
+                    new_args.append(arg.masked())
+                else:
+                    new_args.append(arg)
+            record.args = tuple(new_args)
+
+        return True
+
+
+def mask_sensitive_value(value: Optional[str], show_chars: int = 4) -> str:
+    """
+    Utility function to mask sensitive values.
+
+    Args:
+        value: The value to mask
+        show_chars: Number of characters to show at the end
+
+    Returns:
+        Masked string
+    """
+    if not value:
+        return '[NOT SET]'
+    if len(value) <= show_chars:
+        return '*' * len(value)
+    return '*' * (len(value) - show_chars) + value[-show_chars:]
+
+
+def sanitize_error_message(error: Exception) -> str:
+    """
+    Sanitize an error message to remove potential credentials.
+
+    Args:
+        error: The exception to sanitize
+
+    Returns:
+        Sanitized error message
+    """
+    msg = str(error)
+
+    # Common patterns that might contain credentials
+    patterns = [
+        (r'password[=:]\s*\S+', 'password=***'),
+        (r'token[=:]\s*\S+', 'token=***'),
+        (r'key[=:]\s*\S+', 'key=***'),
+        (r'secret[=:]\s*\S+', 'secret=***'),
+        (r'://[^:]+:[^@]+@', '://***:***@'),
+    ]
+
+    for pattern, replacement in patterns:
+        msg = re.sub(pattern, replacement, msg, flags=re.IGNORECASE)
+
+    return msg
 
 
 class Config:
@@ -94,6 +293,7 @@ class Config:
         'minister', 'treaty', 'raid', 'operation', 'strike', 'conflict',
         'diplomat', 'embassy', 'ambassador', 'coup', 'referendum',
         'nuclear', 'missile', 'defense', 'intelligence', 'spy',
+        'government',
 
         # US & General Politics
         'president', 'presidential', 'vice president', 'vp',
@@ -258,9 +458,73 @@ class Config:
                 if not email_valid:
                     CredentialValidator.log_disabled_alert_warning("Email")
 
+    @classmethod
+    def __repr__(cls) -> str:
+        """
+        Return a string representation with all sensitive values masked.
+        This is safe to include in logs and error messages.
+        """
+        sensitive_fields = {
+            'POLYMARKET_API_KEY', 'DATABASE_URL', 'POLYGON_RPC_URL',
+            'TELEGRAM_BOT_TOKEN', 'TELEGRAM_CHAT_ID',
+            'SMTP_PASSWORD', 'SMTP_USERNAME'
+        }
+
+        parts = ['Config(']
+        for field_name in sorted(dir(cls)):
+            if field_name.startswith('_') or field_name.isupper() is False:
+                continue
+            if callable(getattr(cls, field_name, None)):
+                continue
+
+            value = getattr(cls, field_name, None)
+
+            # Mask sensitive fields
+            if field_name in sensitive_fields:
+                display_value = mask_sensitive_value(value)
+            else:
+                display_value = repr(value)
+
+            parts.append(f'  {field_name}={display_value}')
+
+        parts.append(')')
+        return '\n'.join(parts)
+
+    @classmethod
+    def get_safe_database_url(cls) -> str:
+        """
+        Get database URL with password masked for logging.
+
+        Returns:
+            Database URL with password replaced by asterisks
+        """
+        url = cls.DATABASE_URL
+        if not url:
+            return '[NOT SET]'
+
+        # Mask password in URL: postgresql://user:password@host -> postgresql://user:***@host
+        return re.sub(r'(://[^:]+:)([^@]+)(@)', r'\1***\3', url)
+
 
 # Create config instance
 config = Config()
 
 # Ensure directories exist on import
 config.ensure_directories()
+
+# Install the credential masking filter on the root logger
+# This ensures all log output has sensitive data masked
+_masking_filter = CredentialMaskingFilter()
+
+
+def install_credential_masking():
+    """
+    Install the credential masking filter on all handlers.
+    Call this after configuring logging.
+    """
+    root_logger = logging.getLogger()
+    for handler in root_logger.handlers:
+        handler.addFilter(_masking_filter)
+
+    # Also add to any new handlers on the root logger
+    root_logger.addFilter(_masking_filter)
