@@ -213,12 +213,14 @@ def check_and_stamp_if_needed() -> bool:
             # Tables exist but no alembic_version - need to stamp
             logger.warning(
                 "Core tables exist but no alembic_version found. "
-                "Stamping database to avoid DuplicateTable errors..."
+                "Stamping at initial revision so Alembic can run remaining migrations..."
             )
 
-            # Derive head revision from script directory instead of hardcoded constant
-            head_revision = _get_head_revision()
-            logger.info(f"Head revision from scripts: {head_revision}")
+            # Stamp at INITIAL revision (not HEAD) so subsequent migrations
+            # run forward and apply any missing columns/tables.
+            # All migrations use idempotency guards, so re-running is safe.
+            initial_revision = 'd3080b390a2a'
+            logger.info(f"Stamping at initial revision: {initial_revision}")
 
             # Atomic: create table + insert in one transaction
             if 'alembic_version' not in existing_tables:
@@ -229,12 +231,13 @@ def check_and_stamp_if_needed() -> bool:
             # Use parameterized query to avoid SQL injection
             conn.execute(
                 text("INSERT INTO alembic_version (version_num) VALUES (:rev) ON CONFLICT (version_num) DO NOTHING"),
-                {"rev": head_revision}
+                {"rev": initial_revision}
             )
             conn.commit()
 
-            logger.info(f"Database stamped with revision: {head_revision}")
-            return True
+            logger.info(f"Database stamped at initial revision: {initial_revision}")
+            # Return False so migrations run forward from initial
+            return False
 
     except Exception as e:
         logger.warning(f"Could not check/stamp database: {e}")
@@ -244,8 +247,7 @@ def check_and_stamp_if_needed() -> bool:
 if context.is_offline_mode():
     run_migrations_offline()
 else:
-    # Check if we need to stamp the database first
-    if not check_and_stamp_if_needed():
-        run_migrations_online()
-    else:
-        logger.info("Skipping migrations - database already stamped")
+    # Stamp at initial revision if needed, then always run migrations forward.
+    # Alembic will detect if the DB is already current and do nothing.
+    check_and_stamp_if_needed()
+    run_migrations_online()

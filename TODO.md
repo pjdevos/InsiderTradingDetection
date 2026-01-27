@@ -1,6 +1,6 @@
 # TODO - Geopolitical Insider Trading Detection System
 
-**Last Updated:** January 21, 2026
+**Last Updated:** January 27, 2026
 **Current Phase:** Phase 7 Planning (Suspicious Wins Detection)
 **Next Milestone:** Implement Win/Loss Tracking & Suspicious Win Scoring
 **Repository:** https://github.com/pjdevos/InsiderTradingDetection
@@ -552,6 +552,34 @@
 
 ## Known Issues & Bugs
 
+### 🔥 Code Review: Post-Incident Audit (Jan 27, 2026)
+
+**Context:** Two production failures were discovered — a DB schema mismatch (stamped migration skipped column additions) and a pipeline crash on trades with missing wallet addresses. Both have been patched, but a broader review is needed to catch similar issues elsewhere.
+
+**Assign to:** `code-reviewer` agent
+
+- [ ] **Migration safety audit**
+  - Review `alembic/env.py` `check_and_stamp_if_needed()` — verify the stamp logic cannot skip migrations that add columns/constraints (the root cause of `trade_result` missing)
+  - Verify all migration files in `alembic/versions/` are idempotent (use `IF NOT EXISTS` / existence checks) so re-runs and stamped DBs don't break
+  - Confirm the migration chain (`d3080b390a2a` → `add_suspicious_wins` → `add_monitor_tables` → `fix_missing_columns`) is sound and each revision's `down_revision` is correct
+  - Check that `fix_missing_suspicious_wins_columns.py` covers every column, table, index, and constraint from `add_suspicious_wins_tables.py`
+
+- [ ] **Null/missing field resilience across the pipeline**
+  - Trace every field extracted from the Polymarket API in `src/api/monitor.py` (`wallet_address`, `market_id`, `transaction_hash`, `bet_size_usd`, `timestamp`, `outcome`, `price`) — verify each has a guard or fallback before reaching the DB layer
+  - Review `src/database/storage.py` `store_trade()` — check that all fields in `db_trade_data` are safe when the API returns `None` (not just `wallet_address`)
+  - Review `src/database/repository.py` `create_trade()` — confirm it handles `None` wallet_address gracefully (line 40 does `trade.wallet_address[:10]` which will crash on `None`)
+  - Review `src/analysis/scoring.py` `calculate_score()` — verify all extracted fields (`bet_size_usd`, `wallet_address`, `timestamp`, `bet_price`, `bet_direction`) have safe defaults when missing
+
+- [ ] **Validator vs caller contract**
+  - Review `src/database/validators.py` `DatabaseInputValidator` — check whether strict validators (that raise on None/empty) are always called behind guards, or if any code path can reach them with invalid data
+  - Specifically check all callers of `validate_wallet_address()`, `validate_market_id()`, and `validate_transaction_hash()`
+
+- [ ] **ORM model vs DB schema alignment**
+  - Compare every column in `src/database/models.py` against what the full migration chain actually creates — flag any column present in the ORM but not guaranteed by migrations
+  - Check `nullable` and `default` values match between model definitions and migration `add_column` calls
+
+---
+
 ### Current Issues (Jan 21, 2026)
 
 1. **Dashboard Deprecation Warning** (Low Priority)
@@ -564,6 +592,10 @@
    - Using price inference as workaround (works well)
 
 ### Resolved Issues ✅
+
+**Jan 27, 2026 (Production Fixes):**
+1. ~~DB schema mismatch: `trade_result` column missing from `trades`~~ → Added backfill migration `fix_missing_columns` that idempotently adds all skipped columns, tables, indexes, and constraints
+2. ~~Pipeline crash on missing wallet address~~ → Added guards in `scoring.py` and `storage.py` to skip wallet metrics for invalid/missing addresses
 
 **Jan 19, 2026 (Resolution Detection):**
 1. ~~JSON string parsing in price inference~~ → Added JSON.loads() for API response
@@ -683,4 +715,4 @@
 
 **Note:** This is a living document. Update regularly as tasks are completed and new requirements emerge.
 
-**Last Updated:** January 21, 2026
+**Last Updated:** January 27, 2026

@@ -34,16 +34,39 @@ class TradeRepository:
             Created Trade object or None if duplicate
         """
         try:
+            # Validate required fields before constructing ORM object
+            if trade_data.get('transaction_hash'):
+                trade_data['transaction_hash'] = DatabaseInputValidator.validate_transaction_hash(
+                    trade_data['transaction_hash']
+                )
+            if trade_data.get('wallet_address'):
+                trade_data['wallet_address'] = DatabaseInputValidator.validate_wallet_address(
+                    trade_data['wallet_address']
+                )
+            if trade_data.get('market_id'):
+                trade_data['market_id'] = DatabaseInputValidator.validate_market_id(
+                    trade_data['market_id']
+                )
+
             trade = Trade(**trade_data)
             session.add(trade)
             session.flush()  # Get the ID
-            logger.debug(f"Created trade: {trade.id} (wallet: {trade.wallet_address[:10]}..., ${trade.bet_size_usd:,.2f})")
+            logger.debug(f"Created trade: {trade.id} (wallet: {(trade.wallet_address or 'unknown')[:10]}..., ${trade.bet_size_usd:,.2f})")
             return trade
+
+        except ValidationError as e:
+            logger.warning(f"Validation failed creating trade: {e}")
+            return None
 
         except IntegrityError as e:
             session.rollback()
             error_str = str(e.orig) if hasattr(e, 'orig') else str(e)
-            if 'UNIQUE constraint failed: trades.transaction_hash' in error_str:
+            is_duplicate = (
+                'UNIQUE constraint failed: trades.transaction_hash' in error_str or  # SQLite
+                ('duplicate key value violates unique constraint' in error_str and
+                 'transaction_hash' in error_str)  # PostgreSQL
+            )
+            if is_duplicate:
                 logger.debug(f"Trade already exists: {trade_data.get('transaction_hash')}")
             else:
                 # Log the full error for debugging other constraint violations
@@ -291,7 +314,7 @@ class WalletRepository:
             metrics = WalletMetrics(wallet_address=wallet_address)
             session.add(metrics)
             session.flush()
-            logger.debug(f"Created wallet metrics for {wallet_address[:10]}...")
+            logger.debug(f"Created wallet metrics for {(wallet_address or 'unknown')[:10]}...")
 
         return metrics
 
@@ -356,7 +379,7 @@ class WalletRepository:
         metrics.last_calculated = datetime.now(timezone.utc)
 
         session.flush()
-        logger.debug(f"Updated wallet metrics for {wallet_address[:10]}... ({metrics.total_trades} trades)")
+        logger.debug(f"Updated wallet metrics for {(wallet_address or 'unknown')[:10]}... ({metrics.total_trades} trades)")
 
         return metrics
 

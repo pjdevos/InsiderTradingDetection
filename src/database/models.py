@@ -135,7 +135,7 @@ class Trade(Base):
     )
 
     def __repr__(self):
-        return f"<Trade(id={self.id}, wallet={self.wallet_address[:10]}..., size=${self.bet_size_usd})>"
+        return f"<Trade(id={self.id}, wallet={(self.wallet_address or 'unknown')[:10]}..., size=${self.bet_size_usd})>"
 
 
 class WalletMetrics(Base):
@@ -203,7 +203,7 @@ class WalletMetrics(Base):
     )
 
     def __repr__(self):
-        return f"<WalletMetrics(wallet={self.wallet_address[:10]}..., trades={self.total_trades}, win_rate={self.win_rate})>"
+        return f"<WalletMetrics(wallet={(self.wallet_address or 'unknown')[:10]}..., trades={self.total_trades}, win_rate={self.win_rate})>"
 
 
 class Alert(Base):
@@ -366,7 +366,7 @@ class WalletWinHistory(Base):
     )
 
     def __repr__(self):
-        return f"<WalletWinHistory(wallet={self.wallet_address[:10]}..., result={self.trade_result}, pnl=${self.profit_loss_usd})>"
+        return f"<WalletWinHistory(wallet={(self.wallet_address or 'unknown')[:10]}..., result={self.trade_result}, pnl=${self.profit_loss_usd})>"
 
 
 class MonitorCheckpoint(Base):

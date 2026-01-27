@@ -149,34 +149,56 @@ class DataStorageService:
                     # Pass session to ensure atomic transaction
                     DataStorageService.store_market(market_data, session=session)
 
+                # Extract and validate required fields before building DB payload
+                transaction_hash = (
+                    trade_data.get('transaction_hash') or
+                    trade_data.get('transactionHash') or
+                    trade_data.get('tx_hash')
+                )
+                wallet_address = (
+                    trade_data.get('wallet_address') or
+                    trade_data.get('proxyWallet') or
+                    trade_data.get('maker') or
+                    trade_data.get('taker')
+                )
+                timestamp = trade_data.get('timestamp')
+                bet_size_usd = float(
+                    trade_data.get('bet_size_usd') or
+                    trade_data.get('size') or
+                    trade_data.get('amount') or 0
+                )
+
+                if not transaction_hash:
+                    logger.warning("Skipping trade: missing transaction_hash")
+                    return None
+                if not wallet_address:
+                    logger.warning(f"Skipping trade {transaction_hash}: missing wallet_address")
+                    return None
+                if not market_id:
+                    logger.warning(f"Skipping trade {transaction_hash}: missing market_id")
+                    return None
+                if not timestamp:
+                    logger.warning(f"Skipping trade {transaction_hash}: missing timestamp")
+                    return None
+                if bet_size_usd <= 0:
+                    logger.warning(f"Skipping trade {transaction_hash}: invalid bet_size_usd ({bet_size_usd})")
+                    return None
+
                 # Convert API format to DB format
                 db_trade_data = {
-                    'transaction_hash': (
-                        trade_data.get('transaction_hash') or
-                        trade_data.get('transactionHash') or  # API uses camelCase
-                        trade_data.get('tx_hash')
-                    ),
+                    'transaction_hash': transaction_hash,
                     'block_number': trade_data.get('block_number'),
-                    'timestamp': trade_data.get('timestamp'),
-                    'wallet_address': (
-                        trade_data.get('wallet_address') or
-                        trade_data.get('proxyWallet') or  # API uses proxyWallet
-                        trade_data.get('maker') or
-                        trade_data.get('taker')
-                    ),
+                    'timestamp': timestamp,
+                    'wallet_address': wallet_address,
                     'market_id': market_id,
-                    'bet_size_usd': float(
-                        trade_data.get('bet_size_usd') or
-                        trade_data.get('size') or  # API uses size
-                        trade_data.get('amount') or 0
-                    ),
+                    'bet_size_usd': bet_size_usd,
                     'bet_direction': DataStorageService._normalize_bet_direction(
                         trade_data.get('outcome') or trade_data.get('bet_direction')
                     ),
                     'bet_price': float(trade_data.get('price', 0) or 0),
                     'outcome': trade_data.get('outcome'),
                     # Cache market info
-                    'market_title': market_data.get('question') if market_data else '',
+                    'market_title': (market_data.get('question') or '') if market_data else '',
                     'market_category': market_data.get('category') if market_data else None,
                     'market_slug': market_data.get('slug') if market_data else None,
                     'market_volume_usd': float(market_data.get('volume', 0) or 0) if market_data else None,
@@ -305,33 +327,43 @@ class DataStorageService:
                             DataStorageService.store_market(market_data, session=session)
                             stored_markets.add(market_id)
 
+                        # Extract and validate required fields
+                        transaction_hash = (
+                            trade.get('transaction_hash') or
+                            trade.get('transactionHash') or
+                            trade.get('tx_hash')
+                        )
+                        wallet_address = (
+                            trade.get('wallet_address') or
+                            trade.get('proxyWallet') or
+                            trade.get('maker') or
+                            trade.get('taker')
+                        )
+                        timestamp = trade.get('timestamp')
+                        bet_size_usd = float(
+                            trade.get('bet_size_usd') or
+                            trade.get('size') or
+                            trade.get('amount') or 0
+                        )
+
+                        if not transaction_hash or not wallet_address or not market_id or not timestamp or bet_size_usd <= 0:
+                            logger.warning(f"Skipping bulk trade: missing required field(s)")
+                            continue
+
                         # Build trade data
                         db_trade_data = {
-                            'transaction_hash': (
-                                trade.get('transaction_hash') or
-                                trade.get('transactionHash') or  # API uses camelCase
-                                trade.get('tx_hash')
-                            ),
+                            'transaction_hash': transaction_hash,
                             'block_number': trade.get('block_number'),
-                            'timestamp': trade.get('timestamp'),
-                            'wallet_address': (
-                                trade.get('wallet_address') or
-                                trade.get('proxyWallet') or  # API uses proxyWallet
-                                trade.get('maker') or
-                                trade.get('taker')
-                            ),
+                            'timestamp': timestamp,
+                            'wallet_address': wallet_address,
                             'market_id': market_id,
-                            'bet_size_usd': float(
-                                trade.get('bet_size_usd') or
-                                trade.get('size') or  # API uses size
-                                trade.get('amount') or 0
-                            ),
+                            'bet_size_usd': bet_size_usd,
                             'bet_direction': DataStorageService._normalize_bet_direction(
                                 trade.get('outcome') or trade.get('bet_direction')
                             ),
                             'bet_price': float(trade.get('price', 0) or 0),
                             'outcome': trade.get('outcome'),
-                            'market_title': market_data.get('question') if market_data else '',
+                            'market_title': (market_data.get('question') or '') if market_data else '',
                             'market_category': market_data.get('category') if market_data else None,
                             'market_slug': market_data.get('slug') if market_data else None,
                             'market_volume_usd': float(market_data.get('volume', 0) or 0) if market_data else None,
