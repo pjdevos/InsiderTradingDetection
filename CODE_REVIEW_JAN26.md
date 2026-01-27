@@ -525,6 +525,59 @@ The code demonstrates good Python practices overall and has excellent architectu
 
 ---
 
+---
+
+## Database-Focused Review (January 27, 2026)
+
+A targeted database review was conducted covering models, connection management, migrations, and storage.
+
+### Critical Issues Found (4)
+
+1. **Missing CHECK constraint for `trade_result` in migration** (`alembic/versions/add_suspicious_wins_tables.py`)
+   - The model defines `CHECK trade_result IN ('WIN','LOSS','PENDING','VOID') OR NULL` but the migration that adds the `trade_result` column never creates this constraint. Also missing index on `resolution_id` foreign key.
+
+2. **Missing Alembic migrations for `MonitorCheckpoint` and `FailedTrade`** (`src/database/models.py`)
+   - These models were added but rely on `Base.metadata.create_all()` instead of proper Alembic migrations, causing schema drift between environments.
+
+3. **Duplicate pool event listener registration** (`src/database/connection.py`)
+   - Event listeners are registered on the global `Pool` class. The `attempt == 0` guard only prevents re-registration within a single `init_db()` call, not across multiple calls (e.g., dashboard startup + monitor startup).
+
+4. **Race condition and hardcoded revision in Alembic auto-stamping** (`alembic/env.py`)
+   - `check_and_stamp_if_needed()` uses a hardcoded `LATEST_REVISION` constant that must be manually updated with each new migration. The CREATE TABLE + INSERT operations are not atomic, creating a race condition. Uses string interpolation instead of parameterized queries.
+
+### Major Issues Found (6) — ALL FIXED
+
+5. ~~Missing index on `trades.resolution_id` foreign key~~ — Fixed in Fix 6 (critical)
+6. ~~Dashboard hourly stats query groups all days together~~ — Fixed: GROUP BY date+hour
+7. ~~Wallet metrics update tightly coupled to trade storage~~ — Fixed: opt-in parameter
+8. ~~Inconsistent retry config between connection.py and env.py~~ — Fixed: aligned to 10/2s
+9. ~~Transaction boundary confusion with optional session parameter~~ — Fixed: extracted `_store_market_in_session()`
+10. ~~Multiple sessions opened per dashboard page load~~ — Fixed: single session passed to page functions
+
+### Minor Issues Found (11)
+
+11. Hardcoded DB URL default in config
+12. Inconsistent column defaults (SQLAlchemy vs database level)
+13. Excessive pool debug logging
+14. Missing composite indexes for common queries
+15. Unlimited `Text` columns without size limits
+16. Incomplete bidirectional relationship (`MarketResolution.market` missing `back_populates`)
+17. Fragile Railway SSL detection via string match
+18. No connection pool statistics monitoring
+19. Auto-commit context manager with no read-only option
+20. Alembic.ini placeholder URL never used (confusing)
+21. `literal_column()` for DESC indexes is fragile across DB backends
+
+### Positives
+
+- Input validation layer (`validators.py`) is excellent
+- Repository pattern is clean with good separation
+- SQL injection properly defended in dashboard
+- Good use of context managers, timezone-aware datetimes, CHECK constraints
+- Connection pooling properly configured with pre-ping and recycling
+
+---
+
 **Reviewed By:** Code Review Agent
-**Date:** January 26, 2026
+**Date:** January 26-27, 2026
 **Status:** Review Complete

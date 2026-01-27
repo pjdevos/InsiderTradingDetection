@@ -40,7 +40,11 @@ init_db()
 
 
 def main():
-    """Main dashboard application"""
+    """Main dashboard application.
+
+    Uses a single database session for the entire page render to avoid
+    opening multiple concurrent connections per Streamlit re-run.
+    """
 
     # Sidebar navigation
     st.sidebar.title("🕵️ Insider Trading Detection")
@@ -63,42 +67,42 @@ def main():
     st.sidebar.markdown("---")
     st.sidebar.markdown("### System Status")
 
-    # Get database stats
     with get_db_session() as session:
+        # Sidebar stats
         total_trades = session.query(func.count(Trade.id)).scalar() or 0
         suspicious_trades = session.query(func.count(Trade.id)).filter(
             Trade.suspicion_score >= config.SUSPICION_THRESHOLD_WATCH
         ).scalar() or 0
 
-    st.sidebar.metric("Total Trades", f"{total_trades:,}")
-    st.sidebar.metric("Suspicious Trades", f"{suspicious_trades:,}")
-    st.sidebar.metric("Detection Rate",
-                      f"{(suspicious_trades/total_trades*100) if total_trades > 0 else 0:.1f}%")
+        st.sidebar.metric("Total Trades", f"{total_trades:,}")
+        st.sidebar.metric("Suspicious Trades", f"{suspicious_trades:,}")
+        st.sidebar.metric("Detection Rate",
+                          f"{(suspicious_trades/total_trades*100) if total_trades > 0 else 0:.1f}%")
 
-    # Route to selected page
-    if page == "🏠 Overview":
-        show_overview()
-    elif page == "🚨 Alert Feed":
-        show_alerts()
-    elif page == "🏆 Suspicious Winners":
-        show_suspicious_winners()
-    elif page == "📊 Trade History":
-        show_trade_history()
-    elif page == "👤 Wallet Analysis":
-        show_wallet_analysis()
-    elif page == "🕸️ Network Patterns":
-        show_network_patterns()
-    elif page == "📈 Statistics":
-        show_statistics()
-    elif page == "⚙️ Settings":
-        show_settings()
+        # Route to selected page (reusing the same session)
+        if page == "🏠 Overview":
+            show_overview(session)
+        elif page == "🚨 Alert Feed":
+            show_alerts(session)
+        elif page == "🏆 Suspicious Winners":
+            show_suspicious_winners(session)
+        elif page == "📊 Trade History":
+            show_trade_history(session)
+        elif page == "👤 Wallet Analysis":
+            show_wallet_analysis()
+        elif page == "🕸️ Network Patterns":
+            show_network_patterns()
+        elif page == "📈 Statistics":
+            show_statistics(session)
+        elif page == "⚙️ Settings":
+            show_settings()
 
 
-def show_overview():
+def show_overview(session):
     """Overview page with key metrics and recent activity"""
     st.title("🏠 Overview Dashboard")
 
-    with get_db_session() as session:
+    if True:  # preserve indentation level for minimal diff
         # Key metrics
         total_trades = session.query(func.count(Trade.id)).scalar() or 0
         watch_count = session.query(func.count(Trade.id)).filter(
@@ -165,27 +169,35 @@ def show_overview():
 
         cutoff = datetime.now(timezone.utc) - timedelta(hours=24)
 
-        # Use SQL aggregation instead of loading all trades into memory
+        # Use SQL aggregation grouped by date + hour for accurate per-hour buckets
         hourly_stats = session.query(
+            func.date(Trade.timestamp).label('trade_date'),
             extract('hour', Trade.timestamp).label('hour'),
             func.count(Trade.id).label('trade_count'),
             func.sum(Trade.bet_size_usd).label('volume')
         ).filter(
             Trade.timestamp >= cutoff
         ).group_by(
+            func.date(Trade.timestamp),
             extract('hour', Trade.timestamp)
         ).order_by(
+            func.date(Trade.timestamp),
             extract('hour', Trade.timestamp)
         ).all()
 
         if hourly_stats:
-            # Build hourly data with current date for proper x-axis display
-            today = datetime.now(timezone.utc).date()
             hourly_data = []
             for stat in hourly_stats:
                 hour_val = int(stat.hour) if stat.hour is not None else 0
+                trade_date = stat.trade_date
+                # Combine date + hour into a proper datetime for the x-axis
+                if trade_date:
+                    dt = datetime(trade_date.year, trade_date.month, trade_date.day, hour_val)
+                else:
+                    today = datetime.now(timezone.utc).date()
+                    dt = datetime(today.year, today.month, today.day, hour_val)
                 hourly_data.append({
-                    'Hour': datetime(today.year, today.month, today.day, hour_val),
+                    'Hour': dt,
                     'Trades': stat.trade_count or 0,
                     'Volume': float(stat.volume) if stat.volume else 0
                 })
@@ -200,7 +212,7 @@ def show_overview():
             st.info("No trades in the last 24 hours.")
 
 
-def show_alerts():
+def show_alerts(session):
     """Alert feed page with pagination"""
     st.title("🚨 Alert Feed")
 
@@ -221,7 +233,7 @@ def show_alerts():
     if 'alert_page' not in st.session_state:
         st.session_state.alert_page = 0
 
-    with get_db_session() as session:
+    if True:  # preserve indentation level for minimal diff
         cutoff = datetime.now(timezone.utc) - timedelta(days=days_back)
 
         # Build base query
@@ -296,7 +308,7 @@ def show_alerts():
             st.info("No alerts found with the selected filters.")
 
 
-def show_trade_history():
+def show_trade_history(session):
     """Trade history page with detailed breakdown"""
     st.title("📊 Trade History")
 
@@ -308,7 +320,7 @@ def show_trade_history():
     with col2:
         limit = st.selectbox("Show", [20, 50, 100, 500], index=1)
 
-    with get_db_session() as session:
+    if True:  # preserve indentation level for minimal diff
         query = session.query(Trade)
 
         if search:
@@ -438,7 +450,7 @@ def show_wallet_analysis():
                     st.metric("Anomaly Score", f"{anomaly['anomaly_score']:.1f}/100")
 
 
-def show_suspicious_winners():
+def show_suspicious_winners(session):
     """Suspicious winners page - wallets with abnormal win patterns"""
     st.title("🏆 Suspicious Winners")
 
@@ -447,7 +459,7 @@ def show_suspicious_winners():
     A high win score suggests potential insider knowledge.
     """)
 
-    with get_db_session() as session:
+    if True:  # preserve indentation level for minimal diff
         # Check if we have resolution data
         resolution_count = session.query(func.count(MarketResolution.id)).scalar() or 0
         win_history_count = session.query(func.count(WalletWinHistory.id)).scalar() or 0
@@ -696,7 +708,7 @@ def show_network_patterns():
             st.info("No coordinated trading networks detected.")
 
 
-def show_statistics():
+def show_statistics(session):
     """Statistics and charts page with efficient queries"""
     st.title("📈 Statistics")
 
@@ -704,7 +716,7 @@ def show_statistics():
     days_back = st.selectbox("Time Period", [7, 30, 90, 365], index=1,
                              format_func=lambda x: f"Last {x} days")
 
-    with get_db_session() as session:
+    if True:  # preserve indentation level for minimal diff
         cutoff = datetime.now(timezone.utc) - timedelta(days=days_back)
 
         # Get total count first

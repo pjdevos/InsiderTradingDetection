@@ -77,8 +77,10 @@ def upgrade() -> None:
     op.add_column('trades', sa.Column('hours_before_resolution', sa.Float(), nullable=True))
     op.add_column('trades', sa.Column('resolution_id', sa.Integer(), nullable=True))
     op.create_foreign_key('fk_trades_resolution', 'trades', 'market_resolutions', ['resolution_id'], ['id'])
+    op.create_check_constraint('check_trade_result', 'trades', "trade_result IN ('WIN', 'LOSS', 'PENDING', 'VOID') OR trade_result IS NULL")
     op.create_index('idx_trades_result', 'trades', ['trade_result'])
     op.create_index('idx_trades_hours_before', 'trades', ['hours_before_resolution'])
+    op.create_index('idx_trades_resolution_id', 'trades', ['resolution_id'])
 
     # Add new columns to wallet_metrics table
     op.add_column('wallet_metrics', sa.Column('geopolitical_wins', sa.Integer(), default=0))
@@ -109,8 +111,10 @@ def downgrade() -> None:
     op.drop_column('wallet_metrics', 'geopolitical_wins')
 
     # Remove indexes and columns from trades
+    op.drop_index('idx_trades_resolution_id', 'trades')
     op.drop_index('idx_trades_hours_before', 'trades')
     op.drop_index('idx_trades_result', 'trades')
+    op.drop_constraint('check_trade_result', 'trades', type_='check')
     op.drop_constraint('fk_trades_resolution', 'trades', type_='foreignkey')
     op.drop_column('trades', 'resolution_id')
     op.drop_column('trades', 'hours_before_resolution')

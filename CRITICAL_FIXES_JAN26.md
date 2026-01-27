@@ -318,6 +318,177 @@ CREATE INDEX idx_failed_trades_tx_hash ON failed_trades(transaction_hash);
 
 ---
 
+---
+
+## Database Critical Fixes (January 27, 2026)
+
+4 critical database issues identified in the database-focused code review have been fixed.
+
+### Fix 6: Missing CHECK Constraint and Index for `trade_result`
+
+**File Modified:** `alembic/versions/add_suspicious_wins_tables.py`
+
+**Changes:**
+- Added `op.create_check_constraint('check_trade_result', 'trades', ...)` to enforce valid `trade_result` values (`WIN`, `LOSS`, `PENDING`, `VOID`, or `NULL`)
+- Added `op.create_index('idx_trades_resolution_id', 'trades', ['resolution_id'])` for foreign key join performance
+- Updated `downgrade()` to drop the constraint and index
+
+**Impact:** Prevents invalid trade results from being stored. Improves JOIN performance on `resolution_id`.
+
+---
+
+### Fix 7: Missing Alembic Migration for MonitorCheckpoint and FailedTrade
+
+**File Created:** `alembic/versions/add_monitor_checkpoint_tables.py`
+
+**Changes:**
+- New migration (revision `add_monitor_tables`, depends on `add_suspicious_wins`)
+- Creates `monitor_checkpoints` table with all columns matching the model
+- Creates `failed_trades` table (dead-letter queue) with all columns matching the model
+- Creates indexes: `idx_failed_trades_status`, `idx_failed_trades_next_retry`, `idx_failed_trades_tx_hash`
+- Proper `downgrade()` to drop tables and indexes
+
+**Impact:** These tables are now managed by Alembic instead of relying on `Base.metadata.create_all()`, preventing schema drift between environments.
+
+---
+
+### Fix 8: Duplicate Pool Event Listener Registration
+
+**File Modified:** `src/database/connection.py`
+
+**Changes:**
+- Added module-level `_pool_listeners_registered` flag
+- Changed guard from `if attempt == 0` to `if not _pool_listeners_registered`
+- Flag set to `True` before registering listeners, preventing re-registration across multiple `init_db()` calls
+
+**Before:**
+```python
+if attempt == 0:  # Only guards within single init_db() call
+    @event.listens_for(Pool, "connect")
+    def receive_connect(dbapi_conn, connection_record): ...
+```
+
+**After:**
+```python
+global _pool_listeners_registered
+if not _pool_listeners_registered:
+    _pool_listeners_registered = True
+    @event.listens_for(Pool, "connect")
+    def receive_connect(dbapi_conn, connection_record): ...
+```
+
+**Impact:** Prevents duplicate log entries, memory leaks, and performance degradation from multiple listener registrations.
+
+---
+
+### Fix 9: Race Condition and Hardcoded Revision in Alembic Auto-Stamping
+
+**File Modified:** `alembic/env.py`
+
+**Changes:**
+- Removed hardcoded `LATEST_REVISION = 'add_suspicious_wins'` constant
+- Added `_get_head_revision()` helper that reads the head revision from `ScriptDirectory` dynamically
+- Replaced string interpolation in SQL with parameterized query (`text(...), {"rev": head_revision}`)
+- Added `ON CONFLICT (version_num) DO NOTHING` for atomicity (handles race if another process creates the row)
+- Single `conn.commit()` after both CREATE TABLE and INSERT for transactional consistency
+- Added `ScriptDirectory` import from `alembic.script`
+
+**Before:**
+```python
+LATEST_REVISION = 'add_suspicious_wins'  # Must manually update!
+# ...
+conn.execute(text(f"INSERT INTO alembic_version (version_num) VALUES ('{LATEST_REVISION}')"))
+conn.commit()  # Separate commits = race condition
+```
+
+**After:**
+```python
+head_revision = _get_head_revision()  # Auto-detected from migration scripts
+# ...
+conn.execute(
+    text("INSERT INTO alembic_version (version_num) VALUES (:rev) ON CONFLICT (version_num) DO NOTHING"),
+    {"rev": head_revision}
+)
+conn.commit()  # Single commit for atomicity
+```
+
+**Impact:** No more manual revision tracking. New migrations are automatically picked up. Race conditions between concurrent processes eliminated. SQL injection vector removed.
+
+---
+
+---
+
+## Database Major Fixes (January 27, 2026)
+
+6 major database issues from the database-focused code review have been fixed.
+
+### Fix 10: Missing Index on `trades.resolution_id` Foreign Key
+
+**Status:** Already resolved as part of Fix 6 (added `idx_trades_resolution_id` in the suspicious wins migration).
+
+---
+
+### Fix 11: Dashboard Hourly Stats Grouping Bug
+
+**File Modified:** `dashboard.py`
+
+**Problem:** The hourly activity chart grouped trades by `extract('hour', timestamp)` only, collapsing all days into a single 0-23 hour range. A trade at Monday 3pm and Tuesday 3pm would be counted in the same bucket.
+
+**Fix:** Added `func.date(Trade.timestamp)` to both the SELECT and GROUP BY clauses, so each date+hour combination gets its own bucket. The x-axis now shows proper datetime values.
+
+**Before:** `GROUP BY extract('hour', timestamp)` — loses date context
+**After:** `GROUP BY func.date(timestamp), extract('hour', timestamp)` — preserves full timeline
+
+---
+
+### Fix 12: Wallet Metrics Tightly Coupled to Trade Storage
+
+**File Modified:** `src/database/storage.py`
+
+**Problem:** Every `store_trade()` call automatically ran `WalletRepository.update_wallet_metrics()`, which recalculates all metrics for that wallet. This slows down every individual insert and is especially wasteful during bulk operations.
+
+**Fix:** Added `update_wallet_metrics` parameter (defaults to `False`). Callers that need metric updates can opt in explicitly; batch callers can update metrics once after all trades are stored.
+
+```python
+# Fast insert (default)
+DataStorageService.store_trade(trade_data, market_data)
+
+# With metric update when needed
+DataStorageService.store_trade(trade_data, market_data, update_wallet_metrics=True)
+```
+
+---
+
+### Fix 13: Inconsistent Retry Configuration
+
+**File Modified:** `alembic/env.py`
+
+**Problem:** `connection.py` uses `MAX_RETRIES=10, INITIAL_DELAY=2` while `alembic/env.py` used `MAX_RETRIES=5, RETRY_DELAY=3`. Different retry behavior makes connection issues harder to debug.
+
+**Fix:** Aligned env.py to use `MAX_RETRIES=10, INITIAL_DELAY=2` matching connection.py. Updated the backoff calculation to use `INITIAL_DELAY`.
+
+---
+
+### Fix 14: Transaction Boundary Confusion in Storage Service
+
+**File Modified:** `src/database/storage.py`
+
+**Problem:** `store_market()` accepted an optional `session` parameter with unclear ownership semantics — when a session was passed in, it was unclear who commits/rolls back.
+
+**Fix:** Extracted the core logic into `_store_market_in_session()` with explicit documentation that the caller owns the transaction. The public `store_market()` method delegates to it, clearly documenting behavior for both session-provided and standalone usage.
+
+---
+
+### Fix 15: Multiple Sessions Per Dashboard Page Load
+
+**File Modified:** `dashboard.py`
+
+**Problem:** The sidebar opened one session for stats, then each page function (`show_overview()`, `show_alerts()`, etc.) opened a second session. This means 2+ concurrent sessions per Streamlit re-run, increasing connection pool pressure.
+
+**Fix:** Refactored `main()` to open a single session that is passed to all page functions. Functions that don't need the session (wallet analysis, network patterns, settings) still manage their own sessions or don't use one. The sidebar stats and main content now share the same session.
+
+---
+
 **Fixed By:** Claude Code Assistant
-**Date:** January 26, 2026
+**Date:** January 26-27, 2026
 **Status:** Complete

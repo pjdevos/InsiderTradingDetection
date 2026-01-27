@@ -49,56 +49,67 @@ class DataStorageService:
     """
 
     @staticmethod
+    def _store_market_in_session(sess, market_data: Dict) -> Optional[Market]:
+        """
+        Store or update market using an existing session.
+
+        The caller owns the transaction: this method does NOT commit or rollback.
+
+        Args:
+            sess: Active SQLAlchemy session (caller manages commit/rollback)
+            market_data: Market data from Polymarket API
+
+        Returns:
+            Market object or None if market_id is missing
+        """
+        market_id = market_data.get('id') or market_data.get('market_id')
+
+        if not market_id:
+            logger.debug("Skipping market storage: no market_id")
+            return None
+
+        db_market_data = {
+            'market_id': market_id,
+            'slug': market_data.get('slug'),
+            'question': market_data.get('question'),
+            'description': market_data.get('description'),
+            'category': market_data.get('category'),
+            'tags': market_data.get('tags', []),
+            'active': market_data.get('active', True),
+            'closed': market_data.get('closed', False),
+            'volume_usd': float(market_data.get('volume', 0) or 0),
+            'liquidity_usd': float(market_data.get('liquidity', 0) or 0),
+            'close_time': _parse_datetime(market_data.get('close_time')),
+            'is_geopolitical': market_data.get('is_geopolitical', False),
+            'risk_keywords': market_data.get('risk_keywords', []),
+        }
+
+        market = MarketRepository.create_or_update_market(sess, db_market_data)
+        logger.debug(f"Stored market: {market.market_id}")
+        return market
+
+    @staticmethod
     def store_market(market_data: Dict, session=None) -> Optional[Market]:
         """
-        Store or update market in database
+        Store or update market in database.
+
+        When ``session`` is provided, the caller owns the transaction (no
+        commit/rollback here).  When ``session`` is None a new session is
+        created and auto-committed on success.
 
         Args:
             market_data: Market data from Polymarket API
-            session: Optional existing database session (for transaction consistency)
+            session: Optional existing session (caller manages transaction)
 
         Returns:
             Market object or None on error
         """
-        def _store_market_impl(sess):
-            # Get market_id from various possible fields
-            market_id = market_data.get('id') or market_data.get('market_id')
-
-            # Skip if no valid market_id
-            if not market_id:
-                logger.debug("Skipping market storage: no market_id")
-                return None
-
-            # Convert API format to DB format
-            db_market_data = {
-                'market_id': market_id,
-                'slug': market_data.get('slug'),
-                'question': market_data.get('question'),
-                'description': market_data.get('description'),
-                'category': market_data.get('category'),
-                'tags': market_data.get('tags', []),  # Store as JSON array
-                'active': market_data.get('active', True),
-                'closed': market_data.get('closed', False),
-                'volume_usd': float(market_data.get('volume', 0) or 0),
-                'liquidity_usd': float(market_data.get('liquidity', 0) or 0),
-                'close_time': _parse_datetime(market_data.get('close_time')),
-                'is_geopolitical': market_data.get('is_geopolitical', False),
-                'risk_keywords': market_data.get('risk_keywords', []),
-            }
-
-            market = MarketRepository.create_or_update_market(sess, db_market_data)
-            logger.debug(f"Stored market: {market.market_id}")
-            return market
-
         try:
-            # Use existing session if provided (for transaction consistency)
             if session is not None:
-                return _store_market_impl(session)
+                return DataStorageService._store_market_in_session(session, market_data)
             else:
-                # Create new session for standalone calls
                 with get_db_session() as new_session:
-                    return _store_market_impl(new_session)
-
+                    return DataStorageService._store_market_in_session(new_session, market_data)
         except Exception as e:
             logger.error(f"Error storing market: {e}", exc_info=True)
             return None
@@ -107,7 +118,8 @@ class DataStorageService:
     def store_trade(
         trade_data: Dict,
         market_data: Dict = None,
-        suspicion_score: int = None
+        suspicion_score: int = None,
+        update_wallet_metrics: bool = False
     ) -> Optional[Trade]:
         """
         Store trade in database
@@ -116,6 +128,9 @@ class DataStorageService:
             trade_data: Trade data from Polymarket API
             market_data: Optional market data to cache
             suspicion_score: Optional suspicion score
+            update_wallet_metrics: Whether to recalculate wallet metrics
+                after storing the trade. Defaults to False to keep inserts
+                fast; callers can batch metric updates separately.
 
         Returns:
             Trade object or None on error or duplicate
@@ -187,11 +202,11 @@ class DataStorageService:
                 if trade:
                     logger.info(f"Stored trade: {trade.id} (${trade.bet_size_usd:,.2f})")
 
-                    # Update wallet metrics asynchronously
-                    try:
-                        WalletRepository.update_wallet_metrics(session, trade.wallet_address)
-                    except Exception as e:
-                        logger.warning(f"Failed to update wallet metrics: {e}")
+                    if update_wallet_metrics:
+                        try:
+                            WalletRepository.update_wallet_metrics(session, trade.wallet_address)
+                        except Exception as e:
+                            logger.warning(f"Failed to update wallet metrics: {e}")
 
                 return trade
 

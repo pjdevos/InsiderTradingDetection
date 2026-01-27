@@ -8,6 +8,7 @@ from sqlalchemy import engine_from_config, create_engine, inspect, text
 from sqlalchemy import pool
 
 from alembic import context
+from alembic.script import ScriptDirectory
 
 # Add src to path
 sys.path.insert(0, str(Path(__file__).parent.parent / 'src'))
@@ -17,9 +18,6 @@ from database.models import Base
 from config import config as app_config
 
 logger = logging.getLogger('alembic.env')
-
-# The latest migration revision - update this when adding new migrations
-LATEST_REVISION = 'add_suspicious_wins'
 
 # this is the Alembic Config object, which provides
 # access to the values within the .ini file in use.
@@ -35,9 +33,9 @@ if database_url and 'railway' in database_url.lower() and 'sslmode' not in datab
 # Set the database URL from our app config
 config.set_main_option('sqlalchemy.url', database_url)
 
-# Retry settings for Railway
-MAX_RETRIES = 5
-RETRY_DELAY = 3  # seconds
+# Retry settings for Railway (aligned with src/database/connection.py)
+MAX_RETRIES = 10
+INITIAL_DELAY = 2  # seconds
 
 # Interpret the config file for Python logging.
 # This line sets up loggers basically.
@@ -140,7 +138,7 @@ def run_migrations_online() -> None:
             ])
 
             if retryable and attempt < MAX_RETRIES - 1:
-                wait_time = RETRY_DELAY * (2 ** attempt)  # Exponential backoff
+                wait_time = INITIAL_DELAY * (2 ** attempt)  # Exponential backoff
                 wait_time = min(wait_time, 30)  # Cap at 30 seconds
                 logger.warning(
                     f"Database connection failed (attempt {attempt + 1}/{MAX_RETRIES}): {e}. "
@@ -156,10 +154,22 @@ def run_migrations_online() -> None:
         raise last_error
 
 
+def _get_head_revision() -> str:
+    """Get the latest revision from the Alembic script directory."""
+    script = ScriptDirectory.from_config(config)
+    head = script.get_current_head()
+    if head is None:
+        raise RuntimeError("No Alembic migration revisions found")
+    return head
+
+
 def check_and_stamp_if_needed() -> bool:
     """
     Check if core tables exist but alembic_version is missing/empty.
-    If so, stamp the database to avoid DuplicateTable errors.
+    If so, stamp the database with the current head revision to avoid
+    DuplicateTable errors.
+
+    Uses a single transaction for atomicity to prevent race conditions.
 
     Returns True if migrations should be skipped (already stamped).
     """
@@ -189,7 +199,6 @@ def check_and_stamp_if_needed() -> bool:
             tables_exist = all(t in existing_tables for t in core_tables)
 
             if not tables_exist:
-                # No existing tables, run migrations normally
                 logger.info("Core tables don't exist, will run migrations normally")
                 return False
 
@@ -199,7 +208,7 @@ def check_and_stamp_if_needed() -> bool:
                 version = result.scalar()
                 if version:
                     logger.info(f"Database already at revision: {version}")
-                    return False  # Already has a version, let alembic handle it
+                    return False
 
             # Tables exist but no alembic_version - need to stamp
             logger.warning(
@@ -207,20 +216,24 @@ def check_and_stamp_if_needed() -> bool:
                 "Stamping database to avoid DuplicateTable errors..."
             )
 
-            # Create alembic_version table if needed
+            # Derive head revision from script directory instead of hardcoded constant
+            head_revision = _get_head_revision()
+            logger.info(f"Head revision from scripts: {head_revision}")
+
+            # Atomic: create table + insert in one transaction
             if 'alembic_version' not in existing_tables:
                 conn.execute(text(
                     "CREATE TABLE alembic_version (version_num VARCHAR(32) NOT NULL PRIMARY KEY)"
                 ))
-                conn.commit()
 
-            # Stamp with the latest revision
-            conn.execute(text(
-                f"INSERT INTO alembic_version (version_num) VALUES ('{LATEST_REVISION}')"
-            ))
+            # Use parameterized query to avoid SQL injection
+            conn.execute(
+                text("INSERT INTO alembic_version (version_num) VALUES (:rev) ON CONFLICT (version_num) DO NOTHING"),
+                {"rev": head_revision}
+            )
             conn.commit()
 
-            logger.info(f"Database stamped with revision: {LATEST_REVISION}")
+            logger.info(f"Database stamped with revision: {head_revision}")
             return True
 
     except Exception as e:

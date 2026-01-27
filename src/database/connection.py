@@ -18,6 +18,7 @@ logger = logging.getLogger(__name__)
 # Global engine and session factory
 _engine = None
 _SessionFactory = None
+_pool_listeners_registered = False
 
 # Retry settings for Railway private networking
 MAX_RETRIES = 10
@@ -73,8 +74,11 @@ def init_db(database_url: str = None, echo: bool = False):
                 connect_args=connect_args,
             )
 
-            # Add connection pool logging (only on first successful attempt)
-            if attempt == 0:
+            # Add connection pool logging (only once globally)
+            global _pool_listeners_registered
+            if not _pool_listeners_registered:
+                _pool_listeners_registered = True
+
                 @event.listens_for(Pool, "connect")
                 def receive_connect(dbapi_conn, connection_record):
                     logger.debug("Database connection established")
