@@ -116,6 +116,9 @@ class SuspicionScorer:
         Returns:
             (score, reasoning)
         """
+        if not wallet_address or not isinstance(wallet_address, str) or len(wallet_address.strip()) != 42:
+            return 0, "Unknown wallet (no valid address)"
+
         try:
             metrics = DataStorageService.get_wallet_metrics(wallet_address)
 

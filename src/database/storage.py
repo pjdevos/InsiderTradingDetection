@@ -202,7 +202,7 @@ class DataStorageService:
                 if trade:
                     logger.info(f"Stored trade: {trade.id} (${trade.bet_size_usd:,.2f})")
 
-                    if update_wallet_metrics:
+                    if update_wallet_metrics and trade.wallet_address and len(trade.wallet_address) == 42:
                         try:
                             WalletRepository.update_wallet_metrics(session, trade.wallet_address)
                         except Exception as e:
@@ -488,6 +488,9 @@ class DataStorageService:
     @staticmethod
     def get_wallet_metrics(wallet_address: str) -> Optional[WalletMetrics]:
         """Get metrics for a specific wallet"""
+        if not wallet_address or not isinstance(wallet_address, str) or len(wallet_address.strip()) != 42:
+            logger.debug(f"Skipping wallet metrics: invalid address '{wallet_address}'")
+            return None
         with get_db_session() as session:
             return WalletRepository.get_or_create_wallet_metrics(session, wallet_address)
 

@@ -1,14 +1,14 @@
-# Critical Code Review Fixes - Phase 1
+# Critical Code Review Fixes
 
-**Date:** January 12, 2026
+**Date:** January 12, 2026 (Phase 1) | January 27, 2026 (Latest)
 **Status:** ✅ All Critical Issues Fixed
-**Tests:** 13/13 Passing
+**Tests:** 64/64 Passing
 
 ---
 
 ## Summary
 
-Following a comprehensive code review, all 5 critical issues identified in Phase 1 have been successfully fixed and tested. The code is now more robust, secure, and maintainable.
+Following a comprehensive code review, all 5 critical issues identified in Phase 1 have been successfully fixed and tested. An additional critical fix was applied on January 27, 2026 for missing wallet address handling. The code is now more robust, secure, and maintainable.
 
 ---
 
@@ -415,7 +415,60 @@ The codebase is now:
 
 ---
 
+---
+
+## Critical Fix 6: Missing Wallet Address Crash (January 27, 2026)
+
+### 6. ✅ Pipeline Crash on Missing/Invalid Wallet Address
+
+**Issue:** Trades with missing or invalid `wallet_address` (empty, None, or non-standard) crash the monitoring pipeline when `get_or_create_wallet_metrics()` calls `validate_wallet_address()`, which raises `ValidationError`.
+
+**Root Cause:** The Polymarket API can return trades without a usable wallet address (no `wallet_address`, `maker`, `proxyWallet`, or `taker` field). This invalid value flowed unchecked into the wallet metrics and scoring systems.
+
+**Error Observed:**
+```
+ValidationError: wallet_address cannot be empty
+```
+Logs showed `Wallet: unknown...nknown` indicating no valid address was extracted.
+
+**Locations & Fixes Applied:**
+
+**`src/analysis/scoring.py` — `score_wallet_history()` (line ~96)**
+Added early return guard before any DB call:
+```python
+if not wallet_address or not isinstance(wallet_address, str) or len(wallet_address.strip()) != 42:
+    return 0, "Unknown wallet (no valid address)"
+```
+
+**`src/database/storage.py` — `store_trade()` (line ~205)**
+Added wallet validity check before updating metrics:
+```python
+if update_wallet_metrics and trade.wallet_address and len(trade.wallet_address) == 42:
+```
+
+**`src/database/storage.py` — `get_wallet_metrics()` (line ~489)**
+Added guard at the public entry point:
+```python
+if not wallet_address or not isinstance(wallet_address, str) or len(wallet_address.strip()) != 42:
+    logger.debug(f"Skipping wallet metrics: invalid address '{wallet_address}'")
+    return None
+```
+
+**What Was NOT Changed:**
+- `validators.py` — The strict `validate_wallet_address()` validator remains correct as a safety net
+- `repository.py` — Keeps its validation as a last line of defense
+- `monitor.py` — Wallet extraction logic is fine; the issue was downstream
+- `Trade` model — wallet_address is allowed to be None/empty in the DB (stores what the API gave)
+
+**Result:**
+- No more crashes on malformed/edge-case trades
+- Clean data (no empty/garbage wallet metrics records created)
+- Scoring pipeline handles missing wallets gracefully (score 0, reason logged)
+- All 64 tests passing
+
+---
+
 **Fixed By:** Claude Code Assistant
 **Reviewed By:** Code Review Agent
-**Date:** January 12, 2026
+**Dates:** January 12, 2026 (Phase 1) | January 27, 2026 (Wallet fix)
 **Status:** ✅ Complete

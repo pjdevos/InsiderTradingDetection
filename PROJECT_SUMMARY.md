@@ -6,7 +6,7 @@ The Geopolitical Insider Trading Detection System is a comprehensive monitoring 
 
 **Current Status:** Phase 6 Complete (Deployed to Railway) | Phase 7 Planning (Suspicious Wins)
 **Started:** January 12, 2026
-**Latest Update:** January 21, 2026
+**Latest Update:** January 27, 2026
 **Version:** 0.7.0 (Production Deployed)
 **Repository:** https://github.com/pjdevos/InsiderTradingDetection
 **Live Dashboard:** Deployed on Railway (PostgreSQL backend)
@@ -1599,12 +1599,13 @@ A comprehensive code review was conducted on January 12, 2026. Key findings:
 
 ### ⚠️ Issues Found & Priority
 
-**Critical (Fix Immediately):**
-1. Error handling in `_make_request()` - response object may not exist
-2. Missing input validation for wallet addresses
-3. Timezone handling - `datetime.utcnow()` deprecated in Python 3.12+
-4. No resource cleanup - session not closed properly
-5. API key validation missing
+**Critical (Fix Immediately) — All Resolved ✅:**
+1. ✅ Error handling in `_make_request()` - response object may not exist (Jan 12)
+2. ✅ Missing input validation for wallet addresses (Jan 12)
+3. ✅ Timezone handling - `datetime.utcnow()` deprecated in Python 3.12+ (Jan 12)
+4. ✅ No resource cleanup - session not closed properly (Jan 12)
+5. ✅ API key validation missing (Jan 12)
+6. ✅ Pipeline crash on missing/invalid wallet address in trades (Jan 27)
 
 **High Priority:**
 1. Implement caching for market data
@@ -1662,6 +1663,9 @@ A comprehensive code review was conducted on January 12, 2026. Key findings:
 7. ~~Timestamp conversion~~ → Unix int converted to datetime in storage.py
 8. ~~Timezone issues~~ → Using timezone-aware datetime throughout
 9. ~~Resource leaks~~ → Proper session management with context managers
+
+**Jan 27, 2026 (Wallet Address Handling):**
+1. ~~Pipeline crash on missing wallet address~~ → Added guards in scoring.py and storage.py to skip wallet metrics for invalid/missing addresses
 
 **Jan 19, 2026 (Resolution Detection):**
 1. ~~JSON string parsing in price inference~~ → Added JSON.loads() for API response handling
@@ -1883,6 +1887,6 @@ InsiderTradingDetection/
 
 ---
 
-**Project Summary Version:** 1.7
-**Last Updated:** January 21, 2026
+**Project Summary Version:** 1.8
+**Last Updated:** January 27, 2026
 **Status:** Phase 6 Complete ✅ | Phase 7 Planning (Suspicious Wins) 🔄
