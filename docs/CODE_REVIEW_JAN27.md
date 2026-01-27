@@ -1,7 +1,7 @@
 # Post-Incident Code Review Report
 
 **Date:** January 27, 2026
-**Status:** 9 Issues Identified — 6 Critical/Major FIXED, 3 Minor Outstanding
+**Status:** 9/9 Issues FIXED
 **Incident Context:** Two production failures on Railway deployment
 
 ---
@@ -910,11 +910,11 @@ except Exception as e:
 | 2 | CRITICAL | alembic/env.py:248 | Stamp logic skips migrations | Future schema mismatches | ✅ FIXED |
 | 3 | MAJOR | storage.py:153-190 | Missing null guards for NOT NULL fields | DB constraint violations | ✅ FIXED |
 | 4 | MAJOR | repository.py:37 | Write path bypasses validators | Invalid data in DB | ✅ FIXED |
-| 5 | MINOR | alembic/versions/*.py | Older migrations not idempotent | Manual recovery issues | ⏳ Outstanding |
+| 5 | MINOR | alembic/versions/*.py | Older migrations not idempotent | Manual recovery issues | ✅ FIXED |
 | 6 | MINOR | models.py:138,206 | __repr__ crashes on None wallet | Debugging crashes | ✅ FIXED |
 | 7 | CRITICAL | storage.py:179, monitor.py:345 | NULL market_title — trades not persisted | Permanent trade data loss | ✅ FIXED |
 | 8 | MAJOR | repository.py:46 | PostgreSQL duplicate detection broken | Log noise, misdiagnosed errors | ✅ FIXED |
-| 9 | MINOR | storage.py:213-215, monitor.py:397-405 | Silent failure masking — errors reported as duplicates | Lost trades, no retry | ⏳ Outstanding |
+| 9 | MINOR | storage.py:213-215, monitor.py:397-405 | Silent failure masking — errors reported as duplicates | Lost trades, no retry | ✅ FIXED |
 
 ---
 
@@ -1137,12 +1137,12 @@ def test_create_trade_validates_inputs():
 - **Finding 3** — `storage.py` `store_trade()`: Extracted `transaction_hash`, `wallet_address`, `timestamp`, `bet_size_usd` into variables with explicit null/validity checks before building `db_trade_data`. Returns `None` with warning log if any required field is missing. Same guards added to `store_trades_bulk()`.
 - **Finding 4** — `repository.py` `create_trade()`: Added `DatabaseInputValidator` calls for `transaction_hash`, `wallet_address`, and `market_id` before constructing the ORM object. `ValidationError` caught and returns `None`.
 
-### Outstanding (Minor — deferred)
-- **Finding 5** — Older migrations (`d3080b390a2a`, `add_suspicious_wins`) lack idempotency guards. Low risk since backfill migration covers the `add_suspicious_wins` case, and Finding 2 fix prevents the stamp-skip scenario.
-- **Finding 9** — `store_trade()` still swallows all exceptions and returns `None`; monitor treats all `None` returns as duplicates. Low impact now that Findings 3 and 7 prevent the data errors that triggered this cascade.
+**Round 4: Minor fixes**
+- **Finding 5** — Added idempotency guards (`_table_exists`, `_column_exists`, `_index_exists`, `_constraint_exists`) to both `d3080b390a2a_initial_schema.py` and `add_suspicious_wins_tables.py`. All `create_table`, `add_column`, `create_index`, and `create_constraint` calls are now wrapped in existence checks.
+- **Finding 9** — `storage.py`: changed `store_trade()` to re-raise non-duplicate exceptions instead of swallowing them. `monitor.py`: added `try/except` around `store_trade()` call so the monitor logs real errors distinctly from duplicates. Log message changed from "likely duplicate" to "duplicate or skipped".
 
 ### Test Results
-All 64 tests passing after all fixes.
+All 64 tests passing after all 9 fixes.
 
 ---
 
@@ -1155,13 +1155,12 @@ The earlier findings (1-6) from the initial audit address migration safety, null
 All findings share a common theme: insufficient defensive programming and validation at system boundaries. The recommended fixes strengthen data integrity, improve error messages, and make the system more resilient to edge cases in API responses.
 
 **Total Issues:** 9 (3 critical, 3 major, 3 minor)
-**Resolved:** 7 of 9 (all critical and major issues fixed)
-**Outstanding:** 2 minor issues (migration idempotency, silent failure masking)
+**Resolved:** 9 of 9 — all issues fixed
 **Tests:** 64/64 passing after all fixes
 
 ---
 
 **Report Prepared By:** Code Review Team
 **Date:** January 27, 2026
-**Revision:** 3 (all critical and major fixes implemented)
-**Status:** 7/9 Fixed — 2 minor issues deferred
+**Revision:** 4 (all 9 issues fixed)
+**Status:** 9/9 Fixed — Complete

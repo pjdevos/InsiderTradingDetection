@@ -234,7 +234,7 @@ class DataStorageService:
 
         except Exception as e:
             logger.error(f"Error storing trade: {e}", exc_info=True)
-            return None
+            raise  # Re-raise so caller can distinguish real errors from duplicates
 
     @staticmethod
     def _get_alert_level(score: int) -> str:

@@ -386,13 +386,17 @@ class RealTimeTradeMonitor:
                 alert_level = None
 
             # Store in database
-            # NOTE: This raises exceptions on storage failures to trigger retry logic in poll_recent_trades()
+            # NOTE: store_trade() returns None for duplicates, raises for real errors
             stored_trade = None
-            stored_trade = DataStorageService.store_trade(
-                trade_data=trade,
-                market_data=market,
-                suspicion_score=suspicion_score
-            )
+            try:
+                stored_trade = DataStorageService.store_trade(
+                    trade_data=trade,
+                    market_data=market,
+                    suspicion_score=suspicion_score
+                )
+            except Exception as e:
+                logger.error(f"Failed to store trade: {e}")
+                stored_trade = None
 
             if stored_trade:
                 logger.info(
@@ -401,8 +405,7 @@ class RealTimeTradeMonitor:
                     f"Alert={stored_trade.alert_level or 'NONE'}"
                 )
             else:
-                # Trade not stored (likely duplicate) - this is OK, don't raise error
-                logger.debug("Trade not stored (likely duplicate)")
+                logger.debug("Trade not stored (duplicate or skipped)")
 
             # Store alert in database if trade was stored and alert_level exists
             stored_alert = None
