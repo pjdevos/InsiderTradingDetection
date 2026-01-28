@@ -41,6 +41,21 @@ All findings have been documented with specific locations, severity assessments,
 
 **Resolution:** Added null guards in `scoring.py` (line 96) and `storage.py` (lines 205, 489) to gracefully handle missing/invalid wallet addresses.
 
+### Incident 3: Dashboard 502 - Application Failed to Respond
+**Date:** January 28, 2026
+**Error:** `502 Bad Gateway - Application failed to respond`
+
+**Root Cause (multi-layered):**
+1. **Blocking startup:** The Railway start command ran `alembic upgrade head && streamlit run ...` sequentially. If alembic hung on DB connection (up to 210s with exponential backoff), Streamlit never started and Railway killed the container.
+2. **Module-level `init_db()`:** `dashboard.py` called `init_db()` at module scope (line 39), blocking Streamlit from binding its port until DB connected.
+3. **Port mismatch:** Railway networking was configured to route traffic to port 8501, but no `PORT` environment variable was set. Streamlit received Railway's default internal port (8080), creating a mismatch.
+
+**Resolution:**
+- Created `scripts/start_web.py` — runs migrations with a 30s timeout, then starts Streamlit regardless via `os.execvp`
+- Moved `init_db()` into `@st.cache_resource` wrapper with `max_retries=3` and graceful error page on failure
+- Added `PORT=8501` environment variable in Railway web service settings
+- Updated Railway start command to `python scripts/start_web.py`
+
 ---
 
 ## Migration Chain Analysis
