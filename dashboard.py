@@ -35,16 +35,14 @@ st.set_page_config(
     initial_sidebar_state="expanded"
 )
 
-# Initialize database
-init_db()
-
-
 def main():
     """Main dashboard application.
 
     Uses a single database session for the entire page render to avoid
     opening multiple concurrent connections per Streamlit re-run.
     """
+    # Initialize database (inside main so Streamlit binds the port first)
+    init_db()
 
     # Sidebar navigation
     st.sidebar.title("🕵️ Insider Trading Detection")
