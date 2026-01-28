@@ -35,14 +35,29 @@ st.set_page_config(
     initial_sidebar_state="expanded"
 )
 
+
+@st.cache_resource
+def _init_database():
+    """Initialize DB once, cached across Streamlit reruns. Returns True on success."""
+    try:
+        init_db(max_retries=3)
+        return True
+    except Exception as e:
+        return str(e)
+
+
 def main():
     """Main dashboard application.
 
     Uses a single database session for the entire page render to avoid
     opening multiple concurrent connections per Streamlit re-run.
     """
-    # Initialize database (inside main so Streamlit binds the port first)
-    init_db()
+    db_status = _init_database()
+    if db_status is not True:
+        st.error(f"Database connection failed: {db_status}")
+        st.info("The dashboard will retry on next page refresh.")
+        _init_database.clear()
+        return
 
     # Sidebar navigation
     st.sidebar.title("🕵️ Insider Trading Detection")

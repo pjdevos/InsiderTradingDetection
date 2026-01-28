@@ -21,23 +21,26 @@ _SessionFactory = None
 _pool_listeners_registered = False
 
 # Retry settings for Railway private networking
+# Override with lower values for web processes via init_db(max_retries=...)
 MAX_RETRIES = 10
 INITIAL_DELAY = 2  # seconds
 
 
-def init_db(database_url: str = None, echo: bool = False):
+def init_db(database_url: str = None, echo: bool = False, max_retries: int = None):
     """
     Initialize database connection and create tables
 
     Args:
         database_url: Database connection string (defaults to config)
         echo: Whether to log SQL queries
+        max_retries: Override default MAX_RETRIES (use lower values for web processes)
 
     Note:
         Includes retry logic for Railway private networking DNS resolution
     """
     global _engine, _SessionFactory
 
+    retries = max_retries if max_retries is not None else MAX_RETRIES
     database_url = database_url or config.DATABASE_URL
 
     # Ensure SSL mode for Railway connections
@@ -50,7 +53,7 @@ def init_db(database_url: str = None, echo: bool = False):
 
     # Retry loop for Railway private networking DNS resolution
     last_error = None
-    for attempt in range(MAX_RETRIES):
+    for attempt in range(retries):
         try:
             # Connection arguments for PostgreSQL reliability
             connect_args = {}
@@ -112,7 +115,7 @@ def init_db(database_url: str = None, echo: bool = False):
                 delay = min(delay, 30)  # Cap at 30 seconds
 
                 logger.warning(
-                    f"Database connection failed (attempt {attempt + 1}/{MAX_RETRIES}): {e}. "
+                    f"Database connection failed (attempt {attempt + 1}/{retries}): {e}. "
                     f"Retrying in {delay}s..."
                 )
                 time.sleep(delay)
@@ -122,7 +125,7 @@ def init_db(database_url: str = None, echo: bool = False):
                 raise
 
     # All retries exhausted
-    logger.error(f"Failed to connect to database after {MAX_RETRIES} attempts")
+    logger.error(f"Failed to connect to database after {retries} attempts")
     raise last_error
 
 
