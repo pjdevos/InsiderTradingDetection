@@ -22,8 +22,8 @@ COPY . .
 # Set Python path
 ENV PYTHONPATH=/app/src
 
-# Expose port for Streamlit
+# Expose port (Railway sets $PORT dynamically)
 EXPOSE 8501
 
-# Default command (can be overridden)
-CMD ["streamlit", "run", "dashboard.py", "--server.port", "8501", "--server.address", "0.0.0.0", "--server.headless", "true"]
+# Use shell form so $PORT is expanded at runtime
+CMD streamlit run dashboard.py --server.port ${PORT:-8501} --server.address 0.0.0.0 --server.headless true
