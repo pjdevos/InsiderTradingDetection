@@ -1,17 +1,15 @@
 """
 Suspicion Scoring Algorithm for Geopolitical Insider Trading Detection
 
-Implements a 7-factor scoring system to identify potentially suspicious trades:
+Implements a 6-factor scoring system to identify potentially suspicious trades:
 1. Bet Size (30 points) - Larger bets indicate higher confidence/insider knowledge
 2. Wallet History (40 points) - New wallets, unusual patterns, high accuracy
 3. Market Category (15 points) - Geopolitical markets are higher risk
 4. Timing Anomalies (15 points) - Off-hours, weekend trading
 5. Price/Conviction (15 points) - Betting against market consensus
-6. PizzINT Correlation (30 points) - NOT YET IMPLEMENTED (deferred to future phase)
-7. Market Metadata (20 points) - New markets, low liquidity, high risk keywords
+6. Market Metadata (20 points) - New markets, low liquidity, high risk keywords
 
-Total: 135 points currently implemented (normalized to 0-100 scale)
-Note: Will be 165 points when PizzINT correlation is added
+Total: 135 points (normalized to 0-100 scale)
 
 Phase 4 Enhancement: Blockchain verification integrated into wallet history scoring
 Phase 3.5 Enhancement: Advanced pattern detection integrated (repeat offenders, temporal patterns)
@@ -35,11 +33,10 @@ class SuspicionScorer:
     WEIGHT_MARKET_CATEGORY = 15
     WEIGHT_TIMING = 15
     WEIGHT_PRICE_CONVICTION = 15
-    WEIGHT_PIZZINT = 30  # Deferred to later phase (not counted in MAX_SCORE until implemented)
     WEIGHT_MARKET_METADATA = 20
 
-    # Total possible points (excluding PizzINT until implemented)
-    MAX_SCORE = 135  # Will be 165 when PizzINT is added
+    # Total possible points
+    MAX_SCORE = 135
 
     # Bet size thresholds (USD)
     BET_THRESHOLD_SMALL = 10000
@@ -355,37 +352,9 @@ class SuspicionScorer:
                 return 0, f"Consensus-aligned NO at {bet_price:.2f}"
 
     @staticmethod
-    def score_pizzint_correlation(
-        trade_timestamp: datetime,
-        market_data: Dict = None
-    ) -> Tuple[float, str]:
-        """
-        Factor 6: PizzINT Correlation (30 points max)
-
-        Correlates trade timing with PizzINT operational intelligence spikes.
-
-        NOTE: Deferred to later phase - requires PizzINT scraper implementation.
-
-        Would score based on:
-        - Trade placed <24h before PizzINT spike: 30 points
-        - Trade placed <48h before spike: 20 points
-        - Trade placed <72h before spike: 10 points
-        - No correlation: 0 points
-
-        Args:
-            trade_timestamp: When trade was placed
-            market_data: Optional market metadata
-
-        Returns:
-            (score, reasoning)
-        """
-        # TODO: Implement when PizzINT scraper is ready
-        return 0, "PizzINT correlation not yet implemented"
-
-    @staticmethod
     def score_market_metadata(market_data: Dict) -> Tuple[float, str]:
         """
-        Factor 7: Market Metadata (20 points max)
+        Factor 6: Market Metadata (20 points max)
 
         New markets with low liquidity and high-risk keywords are suspicious targets.
 
@@ -452,8 +421,8 @@ class SuspicionScorer:
 
         Returns:
             Dict with:
-            - total_score: 0-100 (normalized from 165 max)
-            - raw_score: 0-165 (sum of all factors)
+            - total_score: 0-100 (normalized from 135 max)
+            - raw_score: 0-135 (sum of all factors)
             - breakdown: Dict of individual factor scores
             - alert_level: WATCH/SUSPICIOUS/CRITICAL/None
             - blockchain_verified: Whether blockchain verification was used
@@ -487,11 +456,10 @@ class SuspicionScorer:
         score_3, reason_3 = cls.score_market_category(is_geopolitical, category)
         score_4, reason_4 = cls.score_timing_anomalies(timestamp)
         score_5, reason_5 = cls.score_price_conviction(bet_price, bet_direction)
-        score_6, reason_6 = cls.score_pizzint_correlation(timestamp, market_data)
-        score_7, reason_7 = cls.score_market_metadata(market_data or {})
+        score_6, reason_6 = cls.score_market_metadata(market_data or {})
 
         # Calculate total
-        raw_score = score_1 + score_2 + score_3 + score_4 + score_5 + score_6 + score_7
+        raw_score = score_1 + score_2 + score_3 + score_4 + score_5 + score_6
         normalized_score = int((raw_score / cls.MAX_SCORE) * 100)
 
         # Determine alert level
@@ -516,8 +484,7 @@ class SuspicionScorer:
                 'market_category': {'score': score_3, 'max': cls.WEIGHT_MARKET_CATEGORY, 'reason': reason_3},
                 'timing': {'score': score_4, 'max': cls.WEIGHT_TIMING, 'reason': reason_4},
                 'price_conviction': {'score': score_5, 'max': cls.WEIGHT_PRICE_CONVICTION, 'reason': reason_5},
-                'pizzint': {'score': score_6, 'max': cls.WEIGHT_PIZZINT, 'reason': reason_6},
-                'market_metadata': {'score': score_7, 'max': cls.WEIGHT_MARKET_METADATA, 'reason': reason_7},
+                'market_metadata': {'score': score_6, 'max': cls.WEIGHT_MARKET_METADATA, 'reason': reason_6},
             }
         }
 

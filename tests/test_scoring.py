@@ -119,7 +119,7 @@ class TestPriceConvictionScoring(unittest.TestCase):
 
 
 class TestMarketMetadataScoring(unittest.TestCase):
-    """Test Factor 7: Market Metadata scoring"""
+    """Test Factor 6: Market Metadata scoring"""
 
     def test_new_market_low_liquidity(self):
         """New market with low liquidity should score high"""
@@ -228,7 +228,7 @@ class TestCompositeScoring(unittest.TestCase):
         self.assertGreaterEqual(result['total_score'], 0)
         self.assertLessEqual(result['total_score'], 100)
 
-        # Raw score should be higher (out of 165)
+        # Raw score should be higher (out of 135)
         self.assertGreater(result['raw_score'], result['total_score'])
 
 

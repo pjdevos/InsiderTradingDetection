@@ -68,7 +68,7 @@ def test_scoring_integration():
     scoring_result = SuspicionScorer.calculate_score(suspicious_trade, suspicious_market)
     print(f"\n   Score: {scoring_result['total_score']}/100")
     print(f"   Alert Level: {scoring_result['alert_level']}")
-    print(f"   Raw Score: {scoring_result['raw_score']}/165")
+    print(f"   Raw Score: {scoring_result['raw_score']}/135")
 
     print("\n   Score Breakdown:")
     for factor, data in scoring_result['breakdown'].items():
@@ -131,7 +131,7 @@ def test_scoring_integration():
     scoring_result = SuspicionScorer.calculate_score(normal_trade, normal_market)
     print(f"\n   Score: {scoring_result['total_score']}/100")
     print(f"   Alert Level: {scoring_result['alert_level'] or 'NONE'}")
-    print(f"   Raw Score: {scoring_result['raw_score']}/165")
+    print(f"   Raw Score: {scoring_result['raw_score']}/135")
 
     print("\n   Score Breakdown:")
     breakdown = scoring_result['breakdown']
@@ -180,7 +180,7 @@ def test_scoring_integration():
     print("="*70)
     print("\nPhase 3 Core Complete: Suspicion scoring working!")
     print("\nVerified:")
-    print("  [OK] Scoring algorithm calculates all 5 active factors")
+    print("  [OK] Scoring algorithm calculates all 6 factors")
     print("  [OK] Highly suspicious trades score high (>50)")
     print("  [OK] Normal trades score low (<50)")
     print("  [OK] Scores stored correctly in database")
@@ -197,7 +197,6 @@ if __name__ == '__main__':
         print("\nPhase 3 (Core) is complete! Scoring engine operational.")
         print("\nRemaining Phase 3 tasks (optional enhancements):")
         print("  - Wallet pattern recognition (detect suspicious patterns)")
-        print("  - PizzINT data scraper (Factor 6)")
         print("  - Temporal correlation engine")
         print("\nCan proceed to Phase 4: Blockchain Verification")
     else:
