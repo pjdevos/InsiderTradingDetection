@@ -24,6 +24,7 @@ from analysis.patterns import (
     find_suspicious_networks
 )
 from analysis.win_scoring import SuspiciousWinScorer, WIN_ALERT_THRESHOLDS
+from analysis.scoring import SuspicionScorer
 from config import config
 
 
@@ -386,11 +387,45 @@ def show_trade_history(session):
 
                     with col3:
                         st.write("**Scoring**")
-                        st.metric("Total Score", f"{trade.suspicion_score}/100")
+                        st.metric("Total Score", f"{trade.suspicion_score or 0}/100")
                         st.write(f"Alert Level: {get_alert_level(trade.suspicion_score)}")
 
-                        if hasattr(trade, 'scoring_breakdown') and trade.scoring_breakdown:
-                            st.write("Breakdown available")
+                    # Calculate and show scoring breakdown
+                    st.markdown("**Scoring Breakdown**")
+                    try:
+                        trade_data = {
+                            'bet_size_usd': trade.bet_size_usd or 0,
+                            'wallet_address': trade.wallet_address,
+                            'timestamp': trade.timestamp,
+                            'bet_price': trade.bet_price or 0.5,
+                            'bet_direction': trade.bet_direction or 'YES',
+                        }
+                        market_data = {
+                            'is_geopolitical': trade.market_category == 'GEOPOLITICS',
+                            'category': trade.market_category,
+                            'liquidity_usd': trade.market_liquidity_usd,
+                        }
+                        result = SuspicionScorer.calculate_score(trade_data, market_data)
+                        breakdown = result.get('breakdown', {})
+
+                        # Display as a compact table
+                        breakdown_data = []
+                        for factor, data in breakdown.items():
+                            factor_name = factor.replace('_', ' ').title()
+                            breakdown_data.append({
+                                'Factor': factor_name,
+                                'Points': f"{data['score']}/{data['max']}",
+                                'Reason': data['reason'][:50] + '...' if len(data['reason']) > 50 else data['reason']
+                            })
+
+                        st.dataframe(
+                            pd.DataFrame(breakdown_data),
+                            use_container_width=True,
+                            hide_index=True
+                        )
+                        st.caption(f"Raw: {result['raw_score']}/135 → Normalized: {result['total_score']}/100")
+                    except Exception as e:
+                        st.warning(f"Could not calculate breakdown: {e}")
         else:
             st.info("No trades found.")
 
