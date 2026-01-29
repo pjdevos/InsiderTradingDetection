@@ -342,7 +342,8 @@ class RealTimeTradeMonitor:
                     # Include market_id from conditionId for database storage
                     market = {
                         'id': market_id or trade.get('conditionId', 'unknown'),
-                        'question': trade.get('title') or 'Unknown'
+                        'question': trade.get('title') or 'Unknown',
+                        'is_geopolitical': True,
                     }
                 else:
                     category = 'OTHER'
@@ -579,7 +580,8 @@ class RealTimeTradeMonitor:
                 if is_political:
                     trade['market'] = {
                         'id': trade.get('conditionId', 'unknown'),
-                        'question': trade.get('title') or 'Unknown'
+                        'question': trade.get('title') or 'Unknown',
+                        'is_geopolitical': True,
                     }
                     trade['category'] = 'GEOPOLITICS'
                     trade['bet_size_usd'] = self.api.calculate_bet_size_usd(trade)
