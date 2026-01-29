@@ -21,18 +21,30 @@ logger = logging.getLogger(__name__)
 class TradeRepository:
     """Repository for trade operations"""
 
+    # Result codes for create_trade
+    RESULT_CREATED = 'created'
+    RESULT_DUPLICATE = 'duplicate'
+    RESULT_VALIDATION_ERROR = 'validation_error'
+    RESULT_ERROR = 'error'
+
     @staticmethod
-    def create_trade(session: Session, trade_data: Dict) -> Optional[Trade]:
+    def create_trade(session: Session, trade_data: Dict) -> tuple[Optional[Trade], str]:
         """
-        Create a new trade record
+        Create a new trade record with idempotent handling.
 
         Args:
             session: Database session
             trade_data: Dictionary with trade information
 
         Returns:
-            Created Trade object or None if duplicate
+            Tuple of (Trade object or None, result_code)
+            - (Trade, 'created'): New trade inserted
+            - (Trade, 'duplicate'): Existing trade returned (idempotent)
+            - (None, 'validation_error'): Invalid input data
+            - (None, 'error'): Database or other error
         """
+        tx_hash = trade_data.get('transaction_hash', 'unknown')[:10]
+
         try:
             # Validate required fields before constructing ORM object
             if trade_data.get('transaction_hash'):
@@ -51,12 +63,12 @@ class TradeRepository:
             trade = Trade(**trade_data)
             session.add(trade)
             session.flush()  # Get the ID
-            logger.debug(f"Created trade: {trade.id} (wallet: {(trade.wallet_address or 'unknown')[:10]}..., ${trade.bet_size_usd:,.2f})")
-            return trade
+            logger.info(f"[{tx_hash}] Created trade: ID={trade.id}, ${trade.bet_size_usd:,.2f}")
+            return trade, TradeRepository.RESULT_CREATED
 
         except ValidationError as e:
-            logger.warning(f"Validation failed creating trade: {e}")
-            return None
+            logger.warning(f"[{tx_hash}] Validation failed: {e}")
+            return None, TradeRepository.RESULT_VALIDATION_ERROR
 
         except IntegrityError as e:
             session.rollback()
@@ -67,16 +79,24 @@ class TradeRepository:
                  'transaction_hash' in error_str)  # PostgreSQL
             )
             if is_duplicate:
-                logger.debug(f"Trade already exists: {trade_data.get('transaction_hash')}")
+                # Idempotent: return existing trade
+                existing = session.query(Trade).filter(
+                    Trade.transaction_hash == trade_data.get('transaction_hash')
+                ).first()
+                if existing:
+                    logger.debug(f"[{tx_hash}] Duplicate trade, returning existing ID={existing.id}")
+                    return existing, TradeRepository.RESULT_DUPLICATE
+                logger.debug(f"[{tx_hash}] Duplicate detected but couldn't fetch existing")
+                return None, TradeRepository.RESULT_DUPLICATE
             else:
-                # Log the full error for debugging other constraint violations
-                logger.warning(f"IntegrityError creating trade: {error_str}")
-            return None
+                # Other constraint violation (e.g., NULL in NOT NULL column)
+                logger.warning(f"[{tx_hash}] IntegrityError: {error_str}")
+                return None, TradeRepository.RESULT_ERROR
 
         except Exception as e:
             session.rollback()
-            logger.error(f"Error creating trade: {e}", exc_info=True)
-            return None
+            logger.error(f"[{tx_hash}] Error creating trade: {e}", exc_info=True)
+            return None, TradeRepository.RESULT_ERROR
 
     @staticmethod
     def get_trade_by_tx_hash(session: Session, tx_hash: str) -> Optional[Trade]:

@@ -184,6 +184,20 @@ class DataStorageService:
                     logger.warning(f"Skipping trade {transaction_hash}: invalid bet_size_usd ({bet_size_usd})")
                     return None
 
+                # Build market_title with proper fallback (must not be NULL)
+                market_title = None
+                if market_data:
+                    market_title = market_data.get('question') or market_data.get('title')
+                if not market_title:
+                    # Try to get from trade_data (monitor sets this)
+                    market_title = trade_data.get('market_title') or trade_data.get('title')
+                if not market_title:
+                    # Last resort: use market_id as title
+                    market_title = f"Market {market_id}"
+
+                # Correlation ID for logging
+                tx_short = transaction_hash[:10] if transaction_hash else 'unknown'
+
                 # Convert API format to DB format
                 db_trade_data = {
                     'transaction_hash': transaction_hash,
@@ -193,13 +207,13 @@ class DataStorageService:
                     'market_id': market_id,
                     'bet_size_usd': bet_size_usd,
                     'bet_direction': DataStorageService._normalize_bet_direction(
-                        trade_data.get('outcome') or trade_data.get('bet_direction')
+                        trade_data.get('outcome') or trade_data.get('bet_direction') or trade_data.get('side')
                     ),
-                    'bet_price': float(trade_data.get('price', 0) or 0),
+                    'bet_price': float(trade_data.get('price') or trade_data.get('bet_price') or 0),
                     'outcome': trade_data.get('outcome'),
-                    # Cache market info
-                    'market_title': (market_data.get('question') or '') if market_data else '',
-                    'market_category': market_data.get('category') if market_data else None,
+                    # Cache market info (market_title guaranteed non-empty)
+                    'market_title': market_title,
+                    'market_category': (market_data.get('category') if market_data else None) or trade_data.get('category'),
                     'market_slug': market_data.get('slug') if market_data else None,
                     'market_volume_usd': float(market_data.get('volume', 0) or 0) if market_data else None,
                     'market_liquidity_usd': float(market_data.get('liquidity', 0) or 0) if market_data else None,
@@ -219,16 +233,21 @@ class DataStorageService:
                 elif isinstance(ts, str):
                     db_trade_data['timestamp'] = datetime.fromisoformat(ts.replace('Z', '+00:00'))
 
-                trade = TradeRepository.create_trade(session, db_trade_data)
+                trade, result_code = TradeRepository.create_trade(session, db_trade_data)
 
                 if trade:
-                    logger.info(f"Stored trade: {trade.id} (${trade.bet_size_usd:,.2f})")
+                    if result_code == TradeRepository.RESULT_CREATED:
+                        logger.info(f"[{tx_short}] Stored trade: ID={trade.id}, ${trade.bet_size_usd:,.2f}")
+                    elif result_code == TradeRepository.RESULT_DUPLICATE:
+                        logger.debug(f"[{tx_short}] Skipped duplicate: ID={trade.id}")
 
                     if update_wallet_metrics and trade.wallet_address and len(trade.wallet_address) == 42:
                         try:
                             WalletRepository.update_wallet_metrics(session, trade.wallet_address)
                         except Exception as e:
-                            logger.warning(f"Failed to update wallet metrics: {e}")
+                            logger.warning(f"[{tx_short}] Failed to update wallet metrics: {e}")
+                else:
+                    logger.warning(f"[{tx_short}] Failed to store trade: {result_code}")
 
                 return trade
 

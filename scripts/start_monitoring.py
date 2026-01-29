@@ -74,28 +74,42 @@ class InsiderTradingMonitor:
 
     def process_trade(self, trade_data: Dict):
         """
-        Process a detected trade through the full pipeline
+        Process a detected trade through the full pipeline.
+
+        NOTE: The RealTimeTradeMonitor already stores trades in the database.
+        This callback is for additional processing (scoring display, alerts).
 
         Args:
-            trade_data: Trade information dict
+            trade_data: Trade information dict (already stored by monitor)
         """
+        # Generate correlation ID from transaction hash for log tracing
+        tx_hash = (
+            trade_data.get('transaction_hash') or
+            trade_data.get('transactionHash') or
+            trade_data.get('tx_hash') or
+            'unknown'
+        )
+        tx_short = tx_hash[:10] if tx_hash != 'unknown' else 'unknown'
+
         try:
             self.stats['trades_processed'] += 1
 
-            # Extract trade info
-            wallet = trade_data.get('wallet_address', 'unknown')
+            # Extract trade info (monitor.py normalizes these fields)
+            wallet = trade_data.get('wallet_address') or trade_data.get('maker') or 'unknown'
             bet_size = trade_data.get('bet_size_usd', 0)
             market = trade_data.get('market', {})
-            market_title = market.get('question', 'Unknown market')
+            market_title = trade_data.get('market_title') or market.get('question', 'Unknown market')
+            bet_direction = trade_data.get('bet_direction') or trade_data.get('outcome') or 'Unknown'
+            bet_price = trade_data.get('bet_price') or trade_data.get('price') or 0
 
             logger.info(f"\n{'='*70}")
-            logger.info(f"TRADE DETECTED #{self.stats['trades_processed']}")
+            logger.info(f"[{tx_short}] TRADE #{self.stats['trades_processed']}")
             logger.info(f"{'='*70}")
-            logger.info(f"Market:    {market_title[:60]}")
-            logger.info(f"Wallet:    {wallet[:10]}...{wallet[-6:]}")
-            logger.info(f"Bet Size:  ${bet_size:,.2f}")
-            logger.info(f"Direction: {trade_data.get('bet_direction', 'Unknown')}")
-            logger.info(f"Price:     {trade_data.get('bet_price', 0):.2f}")
+            logger.info(f"[{tx_short}] Market:    {market_title[:60]}")
+            logger.info(f"[{tx_short}] Wallet:    {wallet[:10]}...{wallet[-6:] if len(wallet) > 6 else ''}")
+            logger.info(f"[{tx_short}] Bet Size:  ${bet_size:,.2f}")
+            logger.info(f"[{tx_short}] Direction: {bet_direction}")
+            logger.info(f"[{tx_short}] Price:     {float(bet_price):.2f}")
 
             # Calculate suspicion score (blockchain verification disabled for speed)
             scoring_result = SuspicionScorer.calculate_score(
@@ -109,20 +123,16 @@ class InsiderTradingMonitor:
             score = scoring_result['total_score']
             alert_level = scoring_result['alert_level']
 
-            logger.info(f"\n--- SUSPICION SCORE ---")
-            logger.info(f"Total Score: {score}/100")
-            logger.info(f"Alert Level: {alert_level or 'NONE'}")
-            logger.info(f"\nBreakdown:")
+            logger.info(f"[{tx_short}] --- SUSPICION SCORE ---")
+            logger.info(f"[{tx_short}] Total Score: {score}/100")
+            logger.info(f"[{tx_short}] Alert Level: {alert_level or 'NONE'}")
+            logger.info(f"[{tx_short}] Breakdown:")
             for factor, data in scoring_result['breakdown'].items():
-                logger.info(f"  {factor:20s}: {data['score']:2.0f}/{data['max']:2.0f} - {data['reason']}")
+                logger.info(f"[{tx_short}]   {factor:20s}: {data['score']:2.0f}/{data['max']:2.0f} - {data['reason']}")
 
-            # Store in database
-            try:
-                trade_id = DataStorageService.store_trade(trade_data, scoring_result)
-                logger.info(f"\n✓ Stored in database (ID: {trade_id})")
-            except Exception as e:
-                logger.error(f"✗ Database storage failed: {e}")
-                self.stats['errors'] += 1
+            # NOTE: Trade is already stored by RealTimeTradeMonitor.process_trade()
+            # We just log the status here based on what the monitor reported
+            logger.info(f"[{tx_short}] ✓ Trade processed (stored by monitor)")
 
             # Send alert if suspicious
             if alert_level:

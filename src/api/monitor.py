@@ -286,8 +286,12 @@ class RealTimeTradeMonitor:
             bet_size = self.api.calculate_bet_size_usd(trade)
             wallet = trade.get('wallet_address') or trade.get('maker') or trade.get('proxyWallet')
 
+            # Correlation ID for log tracing
+            tx_hash = trade.get('transaction_hash') or trade.get('transactionHash') or trade.get('tx_hash')
+            tx_short = tx_hash[:10] if tx_hash else 'unknown'
+
             logger.info(
-                f"Processing large trade: ${bet_size:,.2f} "
+                f"[{tx_short}] Processing trade: ${bet_size:,.2f} "
                 f"by {wallet[:10] if wallet else 'unknown'}..."
             )
 
@@ -353,13 +357,20 @@ class RealTimeTradeMonitor:
                 logger.debug(f"Skipping non-geopolitical market: {category}")
                 return
 
-            # Enhance trade with market data
+            # Enhance trade with market data and normalized fields
             trade['market'] = market
             trade['category'] = category
             trade['bet_size_usd'] = bet_size
+            # Normalize direction and price for consistent access
+            trade['bet_direction'] = DataStorageService._normalize_bet_direction(
+                trade.get('outcome') or trade.get('side')
+            )
+            trade['bet_price'] = float(trade.get('price', 0) or 0)
+            # Add market_title for logging
+            trade['market_title'] = market.get('question', 'Unknown') if market else 'Unknown'
 
             logger.info(
-                f"Geopolitical trade detected: {market.get('question', 'Unknown')[:60]}"
+                f"[{tx_short}] Geopolitical: {market.get('question', 'Unknown')[:60]}"
             )
 
             # Calculate suspicion score
@@ -369,25 +380,23 @@ class RealTimeTradeMonitor:
                 alert_level = scoring_result['alert_level']
 
                 logger.info(
-                    f"Suspicion score: {suspicion_score}/100 "
-                    f"({alert_level or 'NORMAL'})"
+                    f"[{tx_short}] Score: {suspicion_score}/100 ({alert_level or 'NORMAL'})"
                 )
 
                 # Log score breakdown for high-suspicion trades
                 if suspicion_score >= config.SUSPICION_THRESHOLD_WATCH:
                     breakdown = scoring_result['breakdown']
-                    logger.info("Score breakdown:")
+                    logger.info(f"[{tx_short}] Score breakdown:")
                     for factor, data in breakdown.items():
                         if data['score'] > 0:
-                            logger.info(f"  - {factor}: {data['score']}/{data['max']} - {data['reason']}")
+                            logger.info(f"[{tx_short}]   {factor}: {data['score']}/{data['max']} - {data['reason']}")
 
             except Exception as e:
-                logger.error(f"Error calculating suspicion score: {e}")
+                logger.error(f"[{tx_short}] Error calculating suspicion score: {e}")
                 suspicion_score = None
                 alert_level = None
 
             # Store in database
-            # NOTE: store_trade() returns None for duplicates, raises for real errors
             stored_trade = None
             try:
                 stored_trade = DataStorageService.store_trade(
@@ -396,17 +405,16 @@ class RealTimeTradeMonitor:
                     suspicion_score=suspicion_score
                 )
             except Exception as e:
-                logger.error(f"Failed to store trade: {e}")
+                logger.error(f"[{tx_short}] Failed to store trade: {e}")
                 stored_trade = None
 
             if stored_trade:
                 logger.info(
-                    f"Stored trade in database: ID={stored_trade.id}, "
-                    f"Score={stored_trade.suspicion_score or 0}/100, "
-                    f"Alert={stored_trade.alert_level or 'NONE'}"
+                    f"[{tx_short}] Stored: ID={stored_trade.id}, "
+                    f"Score={stored_trade.suspicion_score or 0}/100"
                 )
             else:
-                logger.debug("Trade not stored (duplicate or skipped)")
+                logger.debug(f"[{tx_short}] Not stored (duplicate or error)")
 
             # Store alert in database if trade was stored and alert_level exists
             stored_alert = None
