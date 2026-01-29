@@ -414,7 +414,8 @@ def show_trade_history(session):
                 with st.expander(
                     f"{trade.timestamp.strftime('%Y-%m-%d %H:%M')} - "
                     f"{trade.market_title[:60]}... - "
-                    f"Score: {trade.suspicion_score}/100"
+                    f"Score: {trade.suspicion_score}/100",
+                    key=f"trade_{trade.id}"
                 ):
                     col1, col2, col3 = st.columns(3)
 
@@ -433,11 +434,11 @@ def show_trade_history(session):
 
                     with col3:
                         st.write("**Scoring**")
-                        st.metric("Total Score", f"{trade.suspicion_score or 0}/100")
+                        st.write(f"**Total Score: {trade.suspicion_score or 0}/100**")
                         st.write(f"Alert Level: {get_alert_level(trade.suspicion_score)}")
 
                     # Show scoring breakdown (use cached calculation)
-                    st.markdown("**Scoring Breakdown**")
+                    st.write("**Scoring Breakdown**")
                     try:
                         breakdown_data, raw_score, total_score = get_cached_breakdown(
                             trade.id,
@@ -450,11 +451,9 @@ def show_trade_history(session):
                             trade.market_liquidity_usd or 0,
                         )
 
-                        st.dataframe(
-                            pd.DataFrame(breakdown_data),
-                            use_container_width=True,
-                            hide_index=True
-                        )
+                        # Use static table instead of dynamic dataframe
+                        for row in breakdown_data:
+                            st.write(f"- **{row['Factor']}**: {row['Points']} - {row['Reason']}")
                         st.caption(f"Raw: {raw_score}/135 -> Normalized: {total_score}/100")
                     except Exception as e:
                         st.warning(f"Could not calculate breakdown: {e}")
