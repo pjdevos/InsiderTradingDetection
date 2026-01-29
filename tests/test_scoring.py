@@ -91,31 +91,36 @@ class TestTimingAnomaliesScoring(unittest.TestCase):
 
 
 class TestPriceConvictionScoring(unittest.TestCase):
-    """Test Factor 5: Price/Conviction scoring"""
+    """Test Factor 5: Price/Conviction scoring
+
+    Contrarian bets (betting against market consensus) are suspicious:
+    - YES at LOW price = contrarian (market expects NO)
+    - NO at HIGH price = contrarian (market expects YES)
+    """
 
     def test_yes_extreme_contrarian(self):
-        """YES bet at very high price (>0.85) should score 15"""
-        score, reason = SuspicionScorer.score_price_conviction(0.90, 'YES')
+        """YES bet at very low price (<=0.15) should score 15 - betting on unlikely outcome"""
+        score, reason = SuspicionScorer.score_price_conviction(0.10, 'YES')
         self.assertEqual(score, 15)
-        self.assertIn("Extreme conviction", reason)
+        self.assertIn("Extreme contrarian", reason)
 
     def test_yes_following_consensus(self):
-        """YES bet at low price (<0.55) should score 0"""
-        score, reason = SuspicionScorer.score_price_conviction(0.30, 'YES')
+        """YES bet at high price (>0.45) should score 0 - following market consensus"""
+        score, reason = SuspicionScorer.score_price_conviction(0.90, 'YES')
         self.assertEqual(score, 0)
-        self.assertIn("Following consensus", reason)
+        self.assertIn("Consensus", reason)
 
     def test_no_extreme_contrarian(self):
-        """NO bet at very low price (<0.15) should score 15"""
-        score, reason = SuspicionScorer.score_price_conviction(0.10, 'NO')
+        """NO bet at very high price (>=0.85) should score 15 - betting against likely outcome"""
+        score, reason = SuspicionScorer.score_price_conviction(0.90, 'NO')
         self.assertEqual(score, 15)
-        self.assertIn("Extreme conviction", reason)
+        self.assertIn("Extreme contrarian", reason)
 
     def test_no_following_consensus(self):
-        """NO bet at high price (>0.45) should score 0"""
-        score, reason = SuspicionScorer.score_price_conviction(0.70, 'NO')
+        """NO bet at low price (<0.55) should score 0 - following market consensus"""
+        score, reason = SuspicionScorer.score_price_conviction(0.10, 'NO')
         self.assertEqual(score, 0)
-        self.assertIn("Following consensus", reason)
+        self.assertIn("Consensus", reason)
 
 
 class TestMarketMetadataScoring(unittest.TestCase):
@@ -152,7 +157,7 @@ class TestCompositeScoring(unittest.TestCase):
             'bet_size_usd': 200000,  # 25 points
             'wallet_address': '0x' + 'a' * 40,
             'timestamp': datetime(2026, 1, 17, 3, 0, tzinfo=timezone.utc),  # Weekend + off-hours: 15 points (Saturday)
-            'bet_price': 0.90,  # Extreme contrarian: 15 points
+            'bet_price': 0.10,  # Extreme contrarian YES at low price: 15 points
             'bet_direction': 'YES'
         }
 
