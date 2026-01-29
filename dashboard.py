@@ -47,6 +47,52 @@ def _init_database():
         return str(e)
 
 
+@st.cache_data(ttl=300)
+def get_cached_breakdown(
+    trade_id, bet_size_usd, wallet_address, timestamp_str,
+    bet_price, bet_direction, market_category, market_liquidity_usd
+):
+    """Cache scoring breakdown to prevent recalculation on every rerun."""
+    from datetime import datetime, timezone
+
+    # Parse timestamp
+    timestamp = None
+    if timestamp_str:
+        try:
+            timestamp = datetime.fromisoformat(timestamp_str.replace('Z', '+00:00'))
+        except (ValueError, AttributeError):
+            timestamp = datetime.now(timezone.utc)
+
+    trade_data = {
+        'bet_size_usd': bet_size_usd,
+        'wallet_address': wallet_address,
+        'timestamp': timestamp,
+        'bet_price': bet_price,
+        'bet_direction': bet_direction,
+    }
+    market_data = {
+        'is_geopolitical': market_category == 'GEOPOLITICS',
+        'category': market_category,
+        'liquidity_usd': market_liquidity_usd,
+    }
+
+    result = SuspicionScorer.calculate_score(trade_data, market_data)
+    breakdown = result.get('breakdown', {})
+
+    # Format for display
+    breakdown_data = []
+    for factor, data in breakdown.items():
+        factor_name = factor.replace('_', ' ').title()
+        reason = data['reason']
+        breakdown_data.append({
+            'Factor': factor_name,
+            'Points': f"{data['score']}/{data['max']}",
+            'Reason': reason[:50] + '...' if len(reason) > 50 else reason
+        })
+
+    return breakdown_data, result['raw_score'], result['total_score']
+
+
 def main():
     """Main dashboard application.
 
@@ -390,40 +436,26 @@ def show_trade_history(session):
                         st.metric("Total Score", f"{trade.suspicion_score or 0}/100")
                         st.write(f"Alert Level: {get_alert_level(trade.suspicion_score)}")
 
-                    # Calculate and show scoring breakdown
+                    # Show scoring breakdown (use cached calculation)
                     st.markdown("**Scoring Breakdown**")
                     try:
-                        trade_data = {
-                            'bet_size_usd': trade.bet_size_usd or 0,
-                            'wallet_address': trade.wallet_address,
-                            'timestamp': trade.timestamp,
-                            'bet_price': trade.bet_price or 0.5,
-                            'bet_direction': trade.bet_direction or 'YES',
-                        }
-                        market_data = {
-                            'is_geopolitical': trade.market_category == 'GEOPOLITICS',
-                            'category': trade.market_category,
-                            'liquidity_usd': trade.market_liquidity_usd,
-                        }
-                        result = SuspicionScorer.calculate_score(trade_data, market_data)
-                        breakdown = result.get('breakdown', {})
-
-                        # Display as a compact table
-                        breakdown_data = []
-                        for factor, data in breakdown.items():
-                            factor_name = factor.replace('_', ' ').title()
-                            breakdown_data.append({
-                                'Factor': factor_name,
-                                'Points': f"{data['score']}/{data['max']}",
-                                'Reason': data['reason'][:50] + '...' if len(data['reason']) > 50 else data['reason']
-                            })
+                        breakdown_data, raw_score, total_score = get_cached_breakdown(
+                            trade.id,
+                            trade.bet_size_usd or 0,
+                            trade.wallet_address or '',
+                            trade.timestamp.isoformat() if trade.timestamp else '',
+                            trade.bet_price or 0.5,
+                            trade.bet_direction or 'YES',
+                            trade.market_category or '',
+                            trade.market_liquidity_usd or 0,
+                        )
 
                         st.dataframe(
                             pd.DataFrame(breakdown_data),
                             use_container_width=True,
                             hide_index=True
                         )
-                        st.caption(f"Raw: {result['raw_score']}/135 → Normalized: {result['total_score']}/100")
+                        st.caption(f"Raw: {raw_score}/135 -> Normalized: {total_score}/100")
                     except Exception as e:
                         st.warning(f"Could not calculate breakdown: {e}")
         else:
