@@ -300,20 +300,27 @@ class SuspicionScorer:
         """
         Factor 5: Price/Conviction (15 points max)
 
-        Betting against market consensus (at unfavorable odds) suggests strong conviction,
-        potentially from insider knowledge.
+        Betting against market consensus suggests insider knowledge.
+        An insider would bet on outcomes the market considers unlikely.
 
         Price interpretation:
         - Price represents probability of YES outcome (0.0 to 1.0)
-        - Buying YES at high price (>0.70) = betting against crowd
-        - Buying NO at low price (<0.30) = betting against crowd
+        - Buying YES at LOW price = betting against crowd (market thinks NO)
+        - Buying NO at HIGH price = betting against crowd (market thinks YES)
 
-        Scoring:
-        - Extreme contrarian (price >0.85 or <0.15): 15 points
-        - Strong contrarian (price >0.75 or <0.25): 12 points
-        - Moderate contrarian (price >0.65 or <0.35): 8 points
-        - Mild contrarian (price >0.55 or <0.45): 4 points
-        - Following consensus: 0 points
+        Scoring (for YES bets - lower price = more contrarian):
+        - Extreme contrarian (price <= 0.15): 15 points
+        - Strong contrarian (price <= 0.25): 12 points
+        - Moderate contrarian (price <= 0.35): 8 points
+        - Mild contrarian (price <= 0.45): 4 points
+        - Following consensus (price > 0.45): 0 points
+
+        Scoring (for NO bets - higher price = more contrarian):
+        - Extreme contrarian (price >= 0.85): 15 points
+        - Strong contrarian (price >= 0.75): 12 points
+        - Moderate contrarian (price >= 0.65): 8 points
+        - Mild contrarian (price >= 0.55): 4 points
+        - Following consensus (price < 0.55): 0 points
 
         Args:
             bet_price: Market price at time of bet (0.0 to 1.0)
@@ -323,29 +330,29 @@ class SuspicionScorer:
             (score, reasoning)
         """
         if bet_direction == 'YES':
-            # Buying YES at high price = strong conviction against crowd
-            if bet_price >= 0.85:
-                return 15, f"Extreme conviction YES at {bet_price:.2f}"
-            elif bet_price >= 0.75:
-                return 12, f"Strong conviction YES at {bet_price:.2f}"
-            elif bet_price >= 0.65:
-                return 8, f"Moderate conviction YES at {bet_price:.2f}"
-            elif bet_price >= 0.55:
-                return 4, f"Mild conviction YES at {bet_price:.2f}"
-            else:
-                return 0, f"Following consensus YES at {bet_price:.2f}"
-        else:  # NO
-            # Buying NO at low price = strong conviction against crowd
+            # Buying YES at low price = betting on unlikely outcome (insider signal)
             if bet_price <= 0.15:
-                return 15, f"Extreme conviction NO at {bet_price:.2f}"
+                return 15, f"Extreme contrarian YES at {bet_price:.2f} (market expects NO)"
             elif bet_price <= 0.25:
-                return 12, f"Strong conviction NO at {bet_price:.2f}"
+                return 12, f"Strong contrarian YES at {bet_price:.2f}"
             elif bet_price <= 0.35:
-                return 8, f"Moderate conviction NO at {bet_price:.2f}"
+                return 8, f"Moderate contrarian YES at {bet_price:.2f}"
             elif bet_price <= 0.45:
-                return 4, f"Mild conviction NO at {bet_price:.2f}"
+                return 4, f"Mild contrarian YES at {bet_price:.2f}"
             else:
-                return 0, f"Following consensus NO at {bet_price:.2f}"
+                return 0, f"Consensus-aligned YES at {bet_price:.2f}"
+        else:  # NO
+            # Buying NO at high price = betting against likely outcome (insider signal)
+            if bet_price >= 0.85:
+                return 15, f"Extreme contrarian NO at {bet_price:.2f} (market expects YES)"
+            elif bet_price >= 0.75:
+                return 12, f"Strong contrarian NO at {bet_price:.2f}"
+            elif bet_price >= 0.65:
+                return 8, f"Moderate contrarian NO at {bet_price:.2f}"
+            elif bet_price >= 0.55:
+                return 4, f"Mild contrarian NO at {bet_price:.2f}"
+            else:
+                return 0, f"Consensus-aligned NO at {bet_price:.2f}"
 
     @staticmethod
     def score_pizzint_correlation(
