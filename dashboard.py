@@ -414,8 +414,7 @@ def show_trade_history(session):
                 with st.expander(
                     f"{trade.timestamp.strftime('%Y-%m-%d %H:%M')} - "
                     f"{trade.market_title[:60]}... - "
-                    f"Score: {trade.suspicion_score}/100",
-                    key=f"trade_{trade.id}"
+                    f"Score: {trade.suspicion_score}/100"
                 ):
                     col1, col2, col3 = st.columns(3)
 
