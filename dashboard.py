@@ -861,6 +861,8 @@ def show_settings():
 
 def get_alert_level(score: int) -> str:
     """Get alert level from score"""
+    if score is None:
+        return "UNKNOWN"
     if score >= config.SUSPICION_THRESHOLD_CRITICAL:
         return "CRITICAL"
     elif score >= config.SUSPICION_THRESHOLD_SUSPICIOUS:
