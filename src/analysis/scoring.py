@@ -116,7 +116,18 @@ class SuspicionScorer:
         if not wallet_address or not isinstance(wallet_address, str) or len(wallet_address.strip()) != 42:
             return 0, "Unknown wallet (no valid address)"
 
+        # Additional check: must start with 0x (Ethereum address format)
+        wallet_address = wallet_address.strip()
+        if not wallet_address.startswith('0x'):
+            return 0, "Invalid wallet format (not Ethereum address)"
+
         try:
+            # Check if DB is available before attempting to query
+            from database.connection import _SessionFactory
+            if _SessionFactory is None:
+                # DB not initialized - return default score for new/unknown wallet
+                return 15, "New wallet (DB not available)"
+
             metrics = DataStorageService.get_wallet_metrics(wallet_address)
 
             if not metrics:
@@ -229,8 +240,17 @@ class SuspicionScorer:
             return min(score, SuspicionScorer.WEIGHT_WALLET_HISTORY), reasoning
 
         except Exception as e:
-            logger.error(f"Error scoring wallet history: {e}")
-            return 0, "Error analyzing wallet"
+            error_str = str(e).lower()
+            # Log with more detail for debugging
+            logger.warning(f"Wallet history scoring failed for {wallet_address[:10]}...: {e}")
+
+            # Return sensible defaults based on error type
+            if "database not initialized" in error_str:
+                return 15, "New wallet (DB unavailable)"
+            elif "validation" in error_str:
+                return 0, "Invalid wallet address format"
+            else:
+                return 0, f"Error analyzing wallet"
 
     @staticmethod
     def score_market_category(is_geopolitical: bool, category: str = None) -> Tuple[float, str]:
