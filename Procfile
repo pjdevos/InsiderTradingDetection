@@ -1,2 +1,3 @@
-web: streamlit run dashboard.py --server.port $PORT --server.address 0.0.0.0 --server.headless true
+web: python scripts/start_web.py
 monitor: python scripts/start_monitoring.py
+resolution: python scripts/start_resolution_monitor.py
