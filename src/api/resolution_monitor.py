@@ -155,12 +155,13 @@ class ResolutionMonitor:
 
         return None
 
-    def store_resolution(self, resolution_data: Dict) -> Optional[MarketResolution]:
+    def store_resolution(self, resolution_data: Dict, market_data: Dict = None) -> Optional[MarketResolution]:
         """
         Store a market resolution in the database.
 
         Args:
             resolution_data: Resolution data dict
+            market_data: Optional market data to create market if not exists
 
         Returns:
             MarketResolution object or None if already exists/failed
@@ -180,6 +181,27 @@ class ResolutionMonitor:
                 if existing:
                     logger.debug(f"Resolution already exists for market {market_id[:20]}...")
                     return existing
+
+                # Ensure market exists (create if not)
+                from database.models import Market
+                market = session.query(Market).filter(Market.market_id == market_id).first()
+                if not market and market_data:
+                    # Create minimal market record
+                    market = Market(
+                        market_id=market_id,
+                        question=market_data.get('question', resolution_data.get('market_question', 'Unknown')),
+                        category=market_data.get('category', 'unknown'),
+                        active=False,
+                        closed=True,
+                        created_at=datetime.now(timezone.utc)
+                    )
+                    session.add(market)
+                    session.flush()
+                    logger.debug(f"Created market record for {market_id[:20]}...")
+                elif not market:
+                    # Skip if market doesn't exist and we don't have data to create it
+                    logger.debug(f"Skipping resolution for unknown market {market_id[:20]}...")
+                    return None
 
                 # Create new resolution
                 resolution = MarketResolution(
@@ -302,7 +324,7 @@ class ResolutionMonitor:
                 resolution_data = self.infer_resolution(market)
 
                 if resolution_data:
-                    stored = self.store_resolution(resolution_data)
+                    stored = self.store_resolution(resolution_data, market_data=market)
                     if stored:
                         resolutions_processed += 1
 
@@ -333,7 +355,7 @@ class ResolutionMonitor:
                 if market_data and market_data.get('closed'):
                     resolution = self.infer_resolution(market_data)
                     if resolution:
-                        stored = self.store_resolution(resolution)
+                        stored = self.store_resolution(resolution, market_data=market_data)
                         results[market_id] = resolution
                     else:
                         results[market_id] = None
