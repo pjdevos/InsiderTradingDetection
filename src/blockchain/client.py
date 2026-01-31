@@ -23,12 +23,17 @@ logger = logging.getLogger(__name__)
 
 
 # Conditional Tokens ABI - minimal ABI for resolution queries
+# Note: payoutNumerators takes (conditionId, outcomeIndex) and returns single uint256
 CONDITIONAL_TOKENS_ABI = [
     {
         "constant": True,
-        "inputs": [{"name": "conditionId", "type": "bytes32"}],
+        "inputs": [
+            {"name": "conditionId", "type": "bytes32"},
+            {"name": "index", "type": "uint256"}
+        ],
         "name": "payoutNumerators",
-        "outputs": [{"name": "", "type": "uint256[]"}],
+        "outputs": [{"name": "", "type": "uint256"}],
+        "stateMutability": "view",
         "type": "function"
     },
     {
@@ -36,6 +41,7 @@ CONDITIONAL_TOKENS_ABI = [
         "inputs": [{"name": "conditionId", "type": "bytes32"}],
         "name": "payoutDenominator",
         "outputs": [{"name": "", "type": "uint256"}],
+        "stateMutability": "view",
         "type": "function"
     },
     {
@@ -43,6 +49,7 @@ CONDITIONAL_TOKENS_ABI = [
         "inputs": [{"name": "conditionId", "type": "bytes32"}],
         "name": "getOutcomeSlotCount",
         "outputs": [{"name": "", "type": "uint256"}],
+        "stateMutability": "view",
         "type": "function"
     }
 ]
@@ -743,24 +750,35 @@ class BlockchainClient:
             # Convert condition_id to bytes32
             condition_bytes = bytes.fromhex(condition_id[2:])
 
-            # Get payout numerators with rate limiting (returns array like [1, 0] or [0, 1] or [0, 0])
-            payout_numerators = self._protected_rpc_call(
-                lambda: contract.functions.payoutNumerators(condition_bytes).call()
+            # First check payoutDenominator - if 0, market is not resolved
+            payout_denominator = self._protected_rpc_call(
+                lambda: contract.functions.payoutDenominator(condition_bytes).call()
             )
 
-            # Get outcome count
+            # Get outcome count (default to 2 for binary markets)
             try:
                 outcome_count = self._protected_rpc_call(
                     lambda: contract.functions.getOutcomeSlotCount(condition_bytes).call()
                 )
             except Exception:
-                outcome_count = len(payout_numerators) if payout_numerators else 2
+                outcome_count = 2
 
             # Determine if resolved and winning outcome
             resolved = False
             winning_outcome = None
+            payout_numerators = []
 
-            if payout_numerators and len(payout_numerators) >= 2:
+            if payout_denominator > 0:
+                # Market is resolved - get individual payout numerators
+                # payoutNumerators(conditionId, index) returns uint256 for each outcome
+                payout_yes = self._protected_rpc_call(
+                    lambda: contract.functions.payoutNumerators(condition_bytes, 0).call()
+                )
+                payout_no = self._protected_rpc_call(
+                    lambda: contract.functions.payoutNumerators(condition_bytes, 1).call()
+                )
+                payout_numerators = [int(payout_yes), int(payout_no)]
+
                 # Check if any payout is non-zero (indicates resolution)
                 if any(p > 0 for p in payout_numerators):
                     resolved = True
@@ -778,7 +796,8 @@ class BlockchainClient:
                 'condition_id': condition_id,
                 'resolved': resolved,
                 'winning_outcome': winning_outcome,
-                'payout_numerators': [int(p) for p in payout_numerators] if payout_numerators else [],
+                'payout_numerators': payout_numerators,
+                'payout_denominator': int(payout_denominator) if payout_denominator else 0,
                 'outcome_count': outcome_count,
                 'source': 'blockchain'
             }

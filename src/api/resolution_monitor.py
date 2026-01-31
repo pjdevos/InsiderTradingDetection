@@ -69,9 +69,40 @@ class ResolutionMonitor:
             logger.error(f"Error fetching closed markets: {e}")
             return []
 
+    def check_blockchain_resolution(self, condition_id: str) -> Optional[Dict]:
+        """
+        Check market resolution directly from blockchain.
+
+        Args:
+            condition_id: The market's conditionId (bytes32 hex string)
+
+        Returns:
+            Resolution data dict or None if not resolved/error
+        """
+        if not condition_id:
+            return None
+
+        try:
+            blockchain_client = BlockchainClient()
+            result = blockchain_client.get_market_resolution(condition_id)
+
+            if result and result.get('resolved'):
+                return {
+                    'winning_outcome': result['winning_outcome'],
+                    'confidence': 1.0,  # Blockchain is authoritative
+                    'resolution_source': 'blockchain',
+                    'payout_numerators': result.get('payout_numerators', []),
+                    'payout_denominator': result.get('payout_denominator', 0),
+                }
+            return None
+
+        except Exception as e:
+            logger.debug(f"Blockchain resolution check failed for {condition_id[:20]}...: {e}")
+            return None
+
     def infer_resolution(self, market_data: Dict) -> Optional[Dict]:
         """
-        Infer market resolution from outcome prices.
+        Detect market resolution using blockchain first, then price inference.
 
         Args:
             market_data: Market data dict from API
@@ -79,11 +110,31 @@ class ResolutionMonitor:
         Returns:
             Resolution data dict or None if not resolvable
         """
+        market_id = market_data.get('id') or market_data.get('conditionId')
+        condition_id = market_data.get('conditionId')
+
+        # Method 1: Check blockchain directly (authoritative)
+        if condition_id:
+            blockchain_result = self.check_blockchain_resolution(condition_id)
+            if blockchain_result:
+                logger.info(f"Blockchain resolution found for {market_id[:20] if market_id else 'unknown'}...")
+                return {
+                    'market_id': market_id,
+                    'condition_id': condition_id,
+                    'winning_outcome': blockchain_result['winning_outcome'],
+                    'confidence': blockchain_result['confidence'],
+                    'resolution_source': 'blockchain',
+                    'payout_numerators': blockchain_result.get('payout_numerators'),
+                    'payout_denominator': blockchain_result.get('payout_denominator'),
+                    'resolved_at': datetime.now(timezone.utc),
+                    'market_question': market_data.get('question', '')[:200]
+                }
+
+        # Method 2: Fall back to price inference
         outcome_prices = market_data.get('outcomePrices')
         if not outcome_prices:
             return None
 
-        # Use the blockchain client's price inference method
         result = BlockchainClient.infer_resolution_from_prices(
             outcome_prices,
             threshold=self.resolution_threshold
@@ -91,8 +142,8 @@ class ResolutionMonitor:
 
         if result and result.get('resolved'):
             return {
-                'market_id': market_data.get('id') or market_data.get('conditionId'),
-                'condition_id': market_data.get('conditionId'),
+                'market_id': market_id,
+                'condition_id': condition_id,
                 'winning_outcome': result['winning_outcome'],
                 'confidence': result['confidence'],
                 'resolution_source': 'price_inference',
