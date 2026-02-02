@@ -36,6 +36,47 @@ st.set_page_config(
     initial_sidebar_state="expanded"
 )
 
+# Inject Neo-Brutalist CSS
+def load_css():
+    """Load the neo-brutalist CSS file"""
+    css_file = Path(__file__).parent / 'static' / 'css' / 'neo-brutalist.css'
+    if css_file.exists():
+        with open(css_file) as f:
+            st.markdown(f'<style>{f.read()}</style>', unsafe_allow_html=True)
+    else:
+        st.warning(f"CSS file not found at {css_file}")
+
+load_css()
+
+
+def render_severity_badge(level):
+    """Render a severity badge with neo-brutalist styling"""
+    if level == "CRITICAL":
+        return '<span class="severity-badge severity-critical">🔴 CRITICAL</span>'
+    elif level == "SUSPICIOUS":
+        return '<span class="severity-badge severity-high">🟠 SUSPICIOUS</span>'
+    elif level == "WATCH":
+        return '<span class="severity-badge severity-medium">🟡 WATCH</span>'
+    else:
+        return '<span class="severity-badge severity-low">⚪ NORMAL</span>'
+
+
+def render_progress_bar(value, max_value=100, severity="normal"):
+    """Render a progress bar with neo-brutalist styling"""
+    percentage = (value / max_value) * 100
+    severity_class = {
+        "critical": "critical",
+        "suspicious": "suspicious",
+        "watch": "watch",
+        "normal": ""
+    }.get(severity, "")
+
+    return f"""
+    <div class="progress-bar">
+        <div class="progress-bar-fill {severity_class}" style="width: {percentage}%;"></div>
+    </div>
+    """
+
 
 @st.cache_resource
 def _init_database():
@@ -106,8 +147,31 @@ def main():
         _init_database.clear()
         return
 
+    # Hero Section (collapsible introduction)
+    if 'hero_dismissed' not in st.session_state:
+        st.session_state.hero_dismissed = False
+
+    if not st.session_state.hero_dismissed:
+        st.markdown("""
+        <div class="hero-section">
+            <button class="hero-close" onclick="document.querySelector('.hero-section').style.display='none'">×</button>
+            <h1 class="hero-headline">POLYMARKET INSIDER TRADING DETECTOR</h1>
+            <p class="hero-tagline">Real-time surveillance of prediction market manipulation</p>
+            <p class="hero-description">
+                This dashboard monitors Polymarket prediction markets in real-time to detect suspicious trading patterns
+                that may indicate insider trading. The system analyzes volume spikes, timing anomalies, and trader behavior
+                to flag markets that warrant closer investigation. Risk scores are calculated from volume spikes,
+                timing patterns, and trader behavior.
+            </p>
+        </div>
+        """, unsafe_allow_html=True)
+
+        if st.button("GOT IT - START MONITORING", key="dismiss_hero"):
+            st.session_state.hero_dismissed = True
+            st.rerun()
+
     # Sidebar navigation
-    st.sidebar.title("🕵️ Insider Trading Detection")
+    st.sidebar.markdown('<div class="header-title">🕵️ INSIDER TRADING DETECTION</div>', unsafe_allow_html=True)
     st.sidebar.markdown("---")
 
     page = st.sidebar.radio(
@@ -125,7 +189,7 @@ def main():
     )
 
     st.sidebar.markdown("---")
-    st.sidebar.markdown("### System Status")
+    st.sidebar.markdown('<h3 style="font-family: var(--font-heading); text-transform: uppercase;">SYSTEM STATUS</h3>', unsafe_allow_html=True)
 
     with get_db_session() as session:
         # Sidebar stats
@@ -133,6 +197,25 @@ def main():
         suspicious_trades = session.query(func.count(Trade.id)).filter(
             Trade.suspicion_score >= config.SUSPICION_THRESHOLD_WATCH
         ).scalar() or 0
+
+        # Metrics bar at top (after hero)
+        now = datetime.now(timezone.utc)
+        st.markdown(f"""
+        <div class="app-metrics-bar">
+            <div class="metric-item">
+                <span>MARKETS MONITORED: <strong>{total_trades:,}</strong></span>
+            </div>
+            <div class="metric-item">
+                <span>ACTIVE ALERTS: <span class="metric-badge">{suspicious_trades}</span></span>
+            </div>
+            <div class="metric-item metric-text-green">
+                <span>SYSTEM STATUS: <span class="status-indicator status-live"></span> OPERATIONAL</span>
+            </div>
+            <div class="metric-item">
+                <span class="text-mono">Updated: {now.strftime('%H:%M:%S')}</span>
+            </div>
+        </div>
+        """, unsafe_allow_html=True)
 
         st.sidebar.metric("Total Trades", f"{total_trades:,}")
         st.sidebar.metric("Suspicious Trades", f"{suspicious_trades:,}")
@@ -160,7 +243,7 @@ def main():
 
 def show_overview(session):
     """Overview page with key metrics and recent activity"""
-    st.title("🏠 Overview Dashboard")
+    st.markdown('<h1 style="font-family: var(--font-heading); text-transform: uppercase; font-size: var(--font-size-xxl);">🏠 OVERVIEW DASHBOARD</h1>', unsafe_allow_html=True)
 
     if True:  # preserve indentation level for minimal diff
         # Key metrics
@@ -177,22 +260,42 @@ def show_overview(session):
             Trade.suspicion_score >= config.SUSPICION_THRESHOLD_CRITICAL
         ).scalar() or 0
 
-        # Display metrics
+        # Display metrics with neo-brutalist styling
         col1, col2, col3, col4 = st.columns(4)
 
         with col1:
-            st.metric("Total Trades", f"{total_trades:,}")
+            st.markdown(f"""
+            <div class="card">
+                <div style="font-family: var(--font-heading); font-size: var(--font-size-sm); text-transform: uppercase;">TOTAL TRADES</div>
+                <div style="font-family: var(--font-mono); font-size: var(--font-size-xxl); font-weight: bold;">{total_trades:,}</div>
+            </div>
+            """, unsafe_allow_html=True)
         with col2:
-            st.metric("🟡 Watch", f"{watch_count:,}")
+            st.markdown(f"""
+            <div class="card card-border-left card-border-watch">
+                <div style="font-family: var(--font-heading); font-size: var(--font-size-sm); text-transform: uppercase;">WATCH</div>
+                <div style="font-family: var(--font-mono); font-size: var(--font-size-xxl); font-weight: bold;">{watch_count:,}</div>
+            </div>
+            """, unsafe_allow_html=True)
         with col3:
-            st.metric("🟠 Suspicious", f"{suspicious_count:,}")
+            st.markdown(f"""
+            <div class="card card-border-left card-border-suspicious">
+                <div style="font-family: var(--font-heading); font-size: var(--font-size-sm); text-transform: uppercase;">SUSPICIOUS</div>
+                <div style="font-family: var(--font-mono); font-size: var(--font-size-xxl); font-weight: bold;">{suspicious_count:,}</div>
+            </div>
+            """, unsafe_allow_html=True)
         with col4:
-            st.metric("🔴 Critical", f"{critical_count:,}")
+            st.markdown(f"""
+            <div class="card card-border-left card-border-critical">
+                <div style="font-family: var(--font-heading); font-size: var(--font-size-sm); text-transform: uppercase;">CRITICAL</div>
+                <div style="font-family: var(--font-mono); font-size: var(--font-size-xxl); font-weight: bold;">{critical_count:,}</div>
+            </div>
+            """, unsafe_allow_html=True)
 
         st.markdown("---")
 
         # Recent alerts
-        st.subheader("📢 Recent Alerts")
+        st.markdown('<h2 style="font-family: var(--font-heading); text-transform: uppercase;">📢 RECENT ALERTS</h2>', unsafe_allow_html=True)
 
         recent_alerts = session.query(Trade).filter(
             Trade.suspicion_score >= config.SUSPICION_THRESHOLD_WATCH
@@ -203,22 +306,35 @@ def show_overview(session):
                 alert_level = get_alert_level(trade.suspicion_score)
                 emoji = {"WATCH": "🟡", "SUSPICIOUS": "🟠", "CRITICAL": "🔴"}.get(alert_level, "⚪")
 
+                # Determine border class
+                if alert_level == "CRITICAL":
+                    border_class = "alert-critical"
+                elif alert_level == "SUSPICIOUS":
+                    border_class = "alert-suspicious"
+                else:
+                    border_class = "alert-watch"
+
                 with st.expander(
                     f"{emoji} {alert_level} - {trade.market_title[:60]}... "
                     f"(Score: {trade.suspicion_score}/100)"
                 ):
-                    col1, col2 = st.columns([2, 1])
-
-                    with col1:
-                        st.write(f"**Market:** {trade.market_title}")
-                        st.write(f"**Wallet:** `{trade.wallet_address[:10]}...{trade.wallet_address[-6:]}`")
-                        st.write(f"**Time:** {trade.timestamp.strftime('%Y-%m-%d %H:%M:%S UTC')}")
-
-                    with col2:
-                        st.metric("Bet Size", f"${trade.bet_size_usd:,.2f}")
-                        st.metric("Suspicion Score", f"{trade.suspicion_score}/100")
-                        st.write(f"**Direction:** {trade.bet_direction}")
-                        st.write(f"**Price:** {trade.bet_price:.2f}")
+                    st.markdown(f"""
+                    <div class="alert {border_class}">
+                        <div style="display: grid; grid-template-columns: 2fr 1fr; gap: var(--spacing-lg);">
+                            <div>
+                                <p><strong>Market:</strong> {trade.market_title}</p>
+                                <p><strong>Wallet:</strong> <code class="text-mono">{trade.wallet_address[:10]}...{trade.wallet_address[-6:]}</code></p>
+                                <p><strong>Time:</strong> <span class="text-mono">{trade.timestamp.strftime('%Y-%m-%d %H:%M:%S UTC')}</span></p>
+                            </div>
+                            <div>
+                                <p><strong>Bet Size:</strong> <span class="text-mono">${trade.bet_size_usd:,.2f}</span></p>
+                                <p><strong>Score:</strong> <span class="text-mono">{trade.suspicion_score}/100</span></p>
+                                <p><strong>Direction:</strong> {trade.bet_direction}</p>
+                                <p><strong>Price:</strong> <span class="text-mono">{trade.bet_price:.2f}</span></p>
+                            </div>
+                        </div>
+                    </div>
+                    """, unsafe_allow_html=True)
         else:
             st.info("No alerts yet. System is monitoring for suspicious trades.")
 
@@ -274,7 +390,7 @@ def show_overview(session):
 
 def show_alerts(session):
     """Alert feed page with pagination"""
-    st.title("🚨 Alert Feed")
+    st.markdown('<h1 style="font-family: var(--font-heading); text-transform: uppercase;">🚨 ALERT FEED</h1>', unsafe_allow_html=True)
 
     # Filters
     col1, col2, col3, col4 = st.columns(4)
@@ -370,7 +486,7 @@ def show_alerts(session):
 
 def show_trade_history(session):
     """Trade history page with detailed breakdown"""
-    st.title("📊 Trade History")
+    st.markdown('<h1 style="font-family: var(--font-heading); text-transform: uppercase;">📊 TRADE HISTORY</h1>', unsafe_allow_html=True)
 
     # Search and filters
     col1, col2 = st.columns([3, 1])
@@ -462,7 +578,7 @@ def show_trade_history(session):
 
 def show_wallet_analysis():
     """Wallet analysis and profiling page"""
-    st.title("👤 Wallet Analysis")
+    st.markdown('<h1 style="font-family: var(--font-heading); text-transform: uppercase;">👤 WALLET ANALYSIS</h1>', unsafe_allow_html=True)
 
     wallet_input = st.text_input(
         "Enter wallet address",
@@ -488,49 +604,103 @@ def show_wallet_analysis():
             profile = analysis['profile']
 
             # Profile overview
-            st.subheader("📊 Wallet Profile")
+            st.markdown('<h2 style="font-family: var(--font-heading); text-transform: uppercase;">📊 WALLET PROFILE</h2>', unsafe_allow_html=True)
 
             col1, col2, col3, col4 = st.columns(4)
 
             with col1:
-                st.metric("Total Trades", profile.total_trades)
-                st.metric("Suspicious Trades", profile.suspicious_trades)
+                st.markdown(f"""
+                <div class="card">
+                    <p style="font-family: var(--font-heading); font-size: var(--font-size-xs); text-transform: uppercase; color: var(--color-gray-dark);">Total Trades</p>
+                    <p style="font-family: var(--font-mono); font-size: var(--font-size-xxl); font-weight: bold;">{profile.total_trades}</p>
+                    <p style="font-family: var(--font-heading); font-size: var(--font-size-xs); text-transform: uppercase; color: var(--color-gray-dark); margin-top: var(--spacing-md);">Suspicious</p>
+                    <p style="font-family: var(--font-mono); font-size: var(--font-size-xl); font-weight: bold; color: var(--color-red);">{profile.suspicious_trades}</p>
+                </div>
+                """, unsafe_allow_html=True)
             with col2:
-                st.metric("Avg Score", f"{profile.avg_suspicion_score:.1f}/100")
-                st.metric("Win Rate", f"{profile.win_rate:.1%}")
+                # Determine severity based on avg score
+                avg_score = profile.avg_suspicion_score
+                if avg_score >= config.SUSPICION_THRESHOLD_CRITICAL:
+                    severity = "critical"
+                elif avg_score >= config.SUSPICION_THRESHOLD_SUSPICIOUS:
+                    severity = "suspicious"
+                elif avg_score >= config.SUSPICION_THRESHOLD_WATCH:
+                    severity = "watch"
+                else:
+                    severity = "normal"
+
+                st.markdown(f"""
+                <div class="card">
+                    <p style="font-family: var(--font-heading); font-size: var(--font-size-xs); text-transform: uppercase; color: var(--color-gray-dark);">Avg Score</p>
+                    <p style="font-family: var(--font-mono); font-size: var(--font-size-xxl); font-weight: bold;">{profile.avg_suspicion_score:.1f}/100</p>
+                    {render_progress_bar(profile.avg_suspicion_score, 100, severity)}
+                    <p style="font-family: var(--font-heading); font-size: var(--font-size-xs); text-transform: uppercase; color: var(--color-gray-dark); margin-top: var(--spacing-md);">Win Rate</p>
+                    <p style="font-family: var(--font-mono); font-size: var(--font-size-xl); font-weight: bold;">{profile.win_rate:.1%}</p>
+                </div>
+                """, unsafe_allow_html=True)
             with col3:
-                st.metric("Avg Bet Size", f"${profile.avg_bet_size:,.2f}")
-                st.metric("Markets Traded", profile.markets_traded)
+                st.markdown(f"""
+                <div class="card">
+                    <p style="font-family: var(--font-heading); font-size: var(--font-size-xs); text-transform: uppercase; color: var(--color-gray-dark);">Avg Bet Size</p>
+                    <p style="font-family: var(--font-mono); font-size: var(--font-size-xxl); font-weight: bold;">${profile.avg_bet_size:,.0f}</p>
+                    <p style="font-family: var(--font-heading); font-size: var(--font-size-xs); text-transform: uppercase; color: var(--color-gray-dark); margin-top: var(--spacing-md);">Markets Traded</p>
+                    <p style="font-family: var(--font-mono); font-size: var(--font-size-xl); font-weight: bold;">{profile.markets_traded}</p>
+                </div>
+                """, unsafe_allow_html=True)
             with col4:
-                st.metric("Wallet Age", f"{profile.wallet_age_days} days")
-                st.metric("Off-Hours %", f"{profile.off_hours_ratio:.1%}")
+                st.markdown(f"""
+                <div class="card">
+                    <p style="font-family: var(--font-heading); font-size: var(--font-size-xs); text-transform: uppercase; color: var(--color-gray-dark);">Wallet Age</p>
+                    <p style="font-family: var(--font-mono); font-size: var(--font-size-xxl); font-weight: bold;">{profile.wallet_age_days}</p>
+                    <p style="font-family: var(--font-mono); font-size: var(--font-size-sm);">days</p>
+                    <p style="font-family: var(--font-heading); font-size: var(--font-size-xs); text-transform: uppercase; color: var(--color-gray-dark); margin-top: var(--spacing-md);">Off-Hours %</p>
+                    <p style="font-family: var(--font-mono); font-size: var(--font-size-xl); font-weight: bold;">{profile.off_hours_ratio:.1%}</p>
+                </div>
+                """, unsafe_allow_html=True)
 
             # Temporal patterns
             if analysis['temporal_patterns']:
-                st.subheader("⏰ Temporal Patterns")
+                st.markdown('<h2 style="font-family: var(--font-heading); text-transform: uppercase;">⏰ TEMPORAL PATTERNS</h2>', unsafe_allow_html=True)
                 for pattern in analysis['temporal_patterns']:
-                    st.info(
-                        f"**{pattern.pattern_type.upper()}**: {pattern.description} "
-                        f"(Confidence: {pattern.confidence_score:.1%})"
-                    )
+                    st.markdown(f"""
+                    <div class="alert alert-watch">
+                        <strong>{pattern.pattern_type.upper()}:</strong> {pattern.description}
+                        <br><strong>Confidence:</strong> <span class="text-mono">{pattern.confidence_score:.1%}</span>
+                    </div>
+                    """, unsafe_allow_html=True)
 
             # Win rate anomaly
             if analysis['win_rate_anomaly']:
-                st.subheader("⚠️ Win Rate Anomaly Detected")
+                st.markdown('<h2 style="font-family: var(--font-heading); text-transform: uppercase;">⚠️ WIN RATE ANOMALY DETECTED</h2>', unsafe_allow_html=True)
                 anomaly = analysis['win_rate_anomaly']
                 col1, col2, col3 = st.columns(3)
 
                 with col1:
-                    st.metric("Observed", f"{anomaly['observed_win_rate']:.1%}")
+                    st.markdown(f"""
+                    <div class="card">
+                        <p style="font-family: var(--font-heading); font-size: var(--font-size-xs); text-transform: uppercase; color: var(--color-gray-dark);">Observed</p>
+                        <p style="font-family: var(--font-mono); font-size: var(--font-size-xxl); font-weight: bold;">{anomaly['observed_win_rate']:.1%}</p>
+                    </div>
+                    """, unsafe_allow_html=True)
                 with col2:
-                    st.metric("Expected", f"{anomaly['baseline_win_rate']:.1%}")
+                    st.markdown(f"""
+                    <div class="card">
+                        <p style="font-family: var(--font-heading); font-size: var(--font-size-xs); text-transform: uppercase; color: var(--color-gray-dark);">Expected</p>
+                        <p style="font-family: var(--font-mono); font-size: var(--font-size-xxl); font-weight: bold;">{anomaly['baseline_win_rate']:.1%}</p>
+                    </div>
+                    """, unsafe_allow_html=True)
                 with col3:
-                    st.metric("Anomaly Score", f"{anomaly['anomaly_score']:.1f}/100")
+                    st.markdown(f"""
+                    <div class="card card-border-left card-border-critical">
+                        <p style="font-family: var(--font-heading); font-size: var(--font-size-xs); text-transform: uppercase; color: var(--color-gray-dark);">Anomaly Score</p>
+                        <p style="font-family: var(--font-mono); font-size: var(--font-size-xxl); font-weight: bold;">{anomaly['anomaly_score']:.1f}/100</p>
+                    </div>
+                    """, unsafe_allow_html=True)
 
 
 def show_suspicious_winners(session):
     """Suspicious winners page - wallets with abnormal win patterns"""
-    st.title("🏆 Suspicious Winners")
+    st.markdown('<h1 style="font-family: var(--font-heading); text-transform: uppercase;">🏆 SUSPICIOUS WINNERS</h1>', unsafe_allow_html=True)
 
     st.markdown("""
     This page shows wallets with abnormally high win rates on prediction markets.
@@ -628,10 +798,9 @@ def show_suspicious_winners(session):
         ).limit(50).all()
 
         if wallets:
-            st.subheader(f"🎯 Top Suspicious Winners ({len(wallets)} found)")
+            st.markdown(f'<h2 style="font-family: var(--font-heading); text-transform: uppercase;">🎯 TOP SUSPICIOUS WINNERS ({len(wallets)} found)</h2>', unsafe_allow_html=True)
 
-            # Create dataframe
-            df_data = []
+            # Create styled table
             for w in wallets:
                 total_resolved = (w.winning_trades or 0) + (w.losing_trades or 0)
                 win_rate = w.win_rate or 0
@@ -639,32 +808,50 @@ def show_suspicious_winners(session):
                 # Determine alert level
                 score = w.suspicious_win_score or 0
                 if score >= WIN_ALERT_THRESHOLDS['CRITICAL_WIN']:
-                    alert_level = "🎯 CRITICAL"
+                    alert_level = "CRITICAL"
+                    border_class = "card-border-critical"
                 elif score >= WIN_ALERT_THRESHOLDS['SUSPICIOUS_WIN']:
-                    alert_level = "💰 SUSPICIOUS"
+                    alert_level = "SUSPICIOUS"
+                    border_class = "card-border-suspicious"
                 elif score >= WIN_ALERT_THRESHOLDS['WATCH_WIN']:
-                    alert_level = "🏆 WATCH"
+                    alert_level = "WATCH"
+                    border_class = "card-border-watch"
                 else:
-                    alert_level = "-"
+                    alert_level = "NORMAL"
+                    border_class = ""
 
-                df_data.append({
-                    'Alert': alert_level,
-                    'Wallet': f"{w.wallet_address[:10]}...{w.wallet_address[-6:]}",
-                    'Win Score': score,
-                    'Win Rate': f"{win_rate:.1%}",
-                    'Wins': w.winning_trades or 0,
-                    'Losses': w.losing_trades or 0,
-                    'Total P&L': f"${w.total_profit_loss_usd or 0:,.2f}",
-                    'Geo Wins': w.geopolitical_wins or 0,
-                    'Geo Acc': f"{w.geopolitical_accuracy:.1%}" if w.geopolitical_accuracy else "N/A"
-                })
-
-            df = pd.DataFrame(df_data)
-            st.dataframe(df, use_container_width=True, hide_index=True)
+                # Render wallet card
+                st.markdown(f"""
+                <div class="card card-border-left {border_class}" style="margin-bottom: var(--spacing-sm);">
+                    <div style="display: grid; grid-template-columns: 1fr 1fr 1fr 1fr; gap: var(--spacing-md);">
+                        <div>
+                            <p style="font-family: var(--font-heading); font-size: var(--font-size-xs); text-transform: uppercase; color: var(--color-gray-dark);">Wallet</p>
+                            <p style="font-family: var(--font-mono); font-weight: bold;">{w.wallet_address[:10]}...{w.wallet_address[-6:]}</p>
+                            <p style="margin-top: var(--spacing-xs);">{render_severity_badge(alert_level)}</p>
+                        </div>
+                        <div>
+                            <p style="font-family: var(--font-heading); font-size: var(--font-size-xs); text-transform: uppercase; color: var(--color-gray-dark);">Win Score</p>
+                            <p style="font-family: var(--font-mono); font-size: var(--font-size-xl); font-weight: bold;">{score}/100</p>
+                            {render_progress_bar(score, 100, alert_level.lower())}
+                        </div>
+                        <div>
+                            <p style="font-family: var(--font-heading); font-size: var(--font-size-xs); text-transform: uppercase; color: var(--color-gray-dark);">Performance</p>
+                            <p style="font-family: var(--font-mono);"><strong>Win Rate:</strong> {win_rate:.1%}</p>
+                            <p style="font-family: var(--font-mono);"><strong>W/L:</strong> {w.winning_trades or 0}/{w.losing_trades or 0}</p>
+                            <p style="font-family: var(--font-mono);"><strong>P&L:</strong> ${w.total_profit_loss_usd or 0:,.2f}</p>
+                        </div>
+                        <div>
+                            <p style="font-family: var(--font-heading); font-size: var(--font-size-xs); text-transform: uppercase; color: var(--color-gray-dark);">Geopolitical</p>
+                            <p style="font-family: var(--font-mono);"><strong>Wins:</strong> {w.geopolitical_wins or 0}</p>
+                            <p style="font-family: var(--font-mono);"><strong>Accuracy:</strong> {f"{w.geopolitical_accuracy:.1%}" if w.geopolitical_accuracy else "N/A"}</p>
+                        </div>
+                    </div>
+                </div>
+                """, unsafe_allow_html=True)
 
             # Detail view for selected wallet
             st.markdown("---")
-            st.subheader("📋 Wallet Details")
+            st.markdown('<h2 style="font-family: var(--font-heading); text-transform: uppercase;">📋 WALLET DETAILS</h2>', unsafe_allow_html=True)
 
             wallet_options = [f"{w.wallet_address[:10]}...{w.wallet_address[-6:]}" for w in wallets]
             selected_idx = st.selectbox("Select wallet for details", range(len(wallet_options)),
@@ -717,7 +904,7 @@ def show_suspicious_winners(session):
 
         # Recent resolutions
         st.markdown("---")
-        st.subheader("📅 Recent Market Resolutions")
+        st.markdown('<h2 style="font-family: var(--font-heading); text-transform: uppercase;">📅 RECENT MARKET RESOLUTIONS</h2>', unsafe_allow_html=True)
 
         resolutions = session.query(MarketResolution).order_by(
             desc(MarketResolution.resolved_at)
@@ -739,13 +926,13 @@ def show_suspicious_winners(session):
 
 def show_network_patterns():
     """Network patterns and coordinated trading page"""
-    st.title("🕸️ Network Patterns")
+    st.markdown('<h1 style="font-family: var(--font-heading); text-transform: uppercase;">🕸️ NETWORK PATTERNS</h1>', unsafe_allow_html=True)
 
     days = st.slider("Days to analyze", 1, 30, 7)
 
     with st.spinner("Detecting patterns..."):
         # Repeat offenders
-        st.subheader("🔁 Repeat Offenders")
+        st.markdown('<h2 style="font-family: var(--font-heading); text-transform: uppercase;">🔁 REPEAT OFFENDERS</h2>', unsafe_allow_html=True)
         offenders = find_repeat_offenders(days=days)
 
         if offenders:
@@ -762,7 +949,7 @@ def show_network_patterns():
             st.info("No repeat offenders found.")
 
         # Network patterns
-        st.subheader("🕸️ Coordinated Trading Networks")
+        st.markdown('<h2 style="font-family: var(--font-heading); text-transform: uppercase;">🕸️ COORDINATED TRADING NETWORKS</h2>', unsafe_allow_html=True)
         networks = find_suspicious_networks(days=days)
 
         if networks:
@@ -788,7 +975,7 @@ def show_network_patterns():
 
 def show_statistics(session):
     """Statistics and charts page with efficient queries"""
-    st.title("📈 Statistics")
+    st.markdown('<h1 style="font-family: var(--font-heading); text-transform: uppercase;">📈 STATISTICS</h1>', unsafe_allow_html=True)
 
     # Time period selector
     days_back = st.selectbox("Time Period", [7, 30, 90, 365], index=1,
@@ -806,10 +993,10 @@ def show_statistics(session):
             st.info("No data available for this time period.")
             return
 
-        st.write(f"**Analyzing {total_count:,} trades from the last {days_back} days**")
+        st.markdown(f'<p style="font-family: var(--font-mono); font-size: var(--font-size-md); font-weight: bold;">Analyzing {total_count:,} trades from the last {days_back} days</p>', unsafe_allow_html=True)
 
         # Score distribution - use SQL aggregation for efficiency
-        st.subheader("Score Distribution")
+        st.markdown('<h2 style="font-family: var(--font-heading); text-transform: uppercase;">SCORE DISTRIBUTION</h2>', unsafe_allow_html=True)
         score_dist = session.query(
             (func.floor(Trade.suspicion_score / 5) * 5).label('score_bucket'),
             func.count(Trade.id).label('count')
@@ -831,7 +1018,7 @@ def show_statistics(session):
             st.plotly_chart(fig, use_container_width=True)
 
         # Bet size statistics - use SQL aggregation
-        st.subheader("Bet Size Statistics")
+        st.markdown('<h2 style="font-family: var(--font-heading); text-transform: uppercase;">BET SIZE STATISTICS</h2>', unsafe_allow_html=True)
         bet_stats = session.query(
             func.min(Trade.bet_size_usd).label('min_bet'),
             func.max(Trade.bet_size_usd).label('max_bet'),
@@ -844,16 +1031,36 @@ def show_statistics(session):
         if bet_stats:
             col1, col2, col3, col4 = st.columns(4)
             with col1:
-                st.metric("Min Bet", f"${bet_stats.min_bet or 0:,.0f}")
+                st.markdown(f"""
+                <div class="card">
+                    <p style="font-family: var(--font-heading); font-size: var(--font-size-xs); text-transform: uppercase; color: var(--color-gray-dark);">Min Bet</p>
+                    <p style="font-family: var(--font-mono); font-size: var(--font-size-xxl); font-weight: bold;">${bet_stats.min_bet or 0:,.0f}</p>
+                </div>
+                """, unsafe_allow_html=True)
             with col2:
-                st.metric("Max Bet", f"${bet_stats.max_bet or 0:,.0f}")
+                st.markdown(f"""
+                <div class="card">
+                    <p style="font-family: var(--font-heading); font-size: var(--font-size-xs); text-transform: uppercase; color: var(--color-gray-dark);">Max Bet</p>
+                    <p style="font-family: var(--font-mono); font-size: var(--font-size-xxl); font-weight: bold;">${bet_stats.max_bet or 0:,.0f}</p>
+                </div>
+                """, unsafe_allow_html=True)
             with col3:
-                st.metric("Avg Bet", f"${bet_stats.avg_bet or 0:,.0f}")
+                st.markdown(f"""
+                <div class="card">
+                    <p style="font-family: var(--font-heading); font-size: var(--font-size-xs); text-transform: uppercase; color: var(--color-gray-dark);">Avg Bet</p>
+                    <p style="font-family: var(--font-mono); font-size: var(--font-size-xxl); font-weight: bold;">${bet_stats.avg_bet or 0:,.0f}</p>
+                </div>
+                """, unsafe_allow_html=True)
             with col4:
-                st.metric("Total Volume", f"${bet_stats.total_volume or 0:,.0f}")
+                st.markdown(f"""
+                <div class="card">
+                    <p style="font-family: var(--font-heading); font-size: var(--font-size-xs); text-transform: uppercase; color: var(--color-gray-dark);">Total Volume</p>
+                    <p style="font-family: var(--font-mono); font-size: var(--font-size-xxl); font-weight: bold;">${bet_stats.total_volume or 0:,.0f}</p>
+                </div>
+                """, unsafe_allow_html=True)
 
         # Daily activity timeline - use SQL aggregation
-        st.subheader("Activity Timeline")
+        st.markdown('<h2 style="font-family: var(--font-heading); text-transform: uppercase;">ACTIVITY TIMELINE</h2>', unsafe_allow_html=True)
         daily_stats = session.query(
             func.date(Trade.timestamp).label('date'),
             func.count(Trade.id).label('trade_count'),
@@ -876,7 +1083,7 @@ def show_statistics(session):
             st.plotly_chart(fig, use_container_width=True)
 
         # Alert level distribution
-        st.subheader("Alert Level Distribution")
+        st.markdown('<h2 style="font-family: var(--font-heading); text-transform: uppercase;">ALERT LEVEL DISTRIBUTION</h2>', unsafe_allow_html=True)
         alert_dist = session.query(
             Trade.alert_level,
             func.count(Trade.id).label('count')
@@ -897,31 +1104,71 @@ def show_statistics(session):
 
 def show_settings():
     """Settings and configuration page"""
-    st.title("⚙️ Settings")
+    st.markdown('<h1 style="font-family: var(--font-heading); text-transform: uppercase;">⚙️ SETTINGS</h1>', unsafe_allow_html=True)
 
-    st.subheader("Alert Thresholds")
+    st.markdown('<h2 style="font-family: var(--font-heading); text-transform: uppercase;">ALERT THRESHOLDS</h2>', unsafe_allow_html=True)
 
     col1, col2, col3 = st.columns(3)
 
     with col1:
-        watch = st.number_input("WATCH", value=config.SUSPICION_THRESHOLD_WATCH,
-                                min_value=0, max_value=100)
-    with col2:
-        suspicious = st.number_input("SUSPICIOUS", value=config.SUSPICION_THRESHOLD_SUSPICIOUS,
-                                    min_value=0, max_value=100)
-    with col3:
-        critical = st.number_input("CRITICAL", value=config.SUSPICION_THRESHOLD_CRITICAL,
-                                  min_value=0, max_value=100)
+        st.markdown("""
+        <div class="card card-border-left card-border-watch">
+            <div style="font-family: var(--font-heading); font-size: var(--font-size-sm); text-transform: uppercase; margin-bottom: var(--spacing-sm);">WATCH THRESHOLD</div>
+        """, unsafe_allow_html=True)
+        watch = st.number_input("Score", value=config.SUSPICION_THRESHOLD_WATCH,
+                                min_value=0, max_value=100, key="watch_threshold", label_visibility="collapsed")
+        st.markdown("</div>", unsafe_allow_html=True)
 
-    st.info("Note: Threshold changes require restarting the monitoring service.")
+    with col2:
+        st.markdown("""
+        <div class="card card-border-left card-border-suspicious">
+            <div style="font-family: var(--font-heading); font-size: var(--font-size-sm); text-transform: uppercase; margin-bottom: var(--spacing-sm);">SUSPICIOUS THRESHOLD</div>
+        """, unsafe_allow_html=True)
+        suspicious = st.number_input("Score", value=config.SUSPICION_THRESHOLD_SUSPICIOUS,
+                                    min_value=0, max_value=100, key="suspicious_threshold", label_visibility="collapsed")
+        st.markdown("</div>", unsafe_allow_html=True)
+
+    with col3:
+        st.markdown("""
+        <div class="card card-border-left card-border-critical">
+            <div style="font-family: var(--font-heading); font-size: var(--font-size-sm); text-transform: uppercase; margin-bottom: var(--spacing-sm);">CRITICAL THRESHOLD</div>
+        """, unsafe_allow_html=True)
+        critical = st.number_input("Score", value=config.SUSPICION_THRESHOLD_CRITICAL,
+                                  min_value=0, max_value=100, key="critical_threshold", label_visibility="collapsed")
+        st.markdown("</div>", unsafe_allow_html=True)
+
+    st.markdown("""
+    <div class="alert alert-watch">
+        <strong>NOTE:</strong> Threshold changes require restarting the monitoring service.
+    </div>
+    """, unsafe_allow_html=True)
 
     st.markdown("---")
 
-    st.subheader("System Information")
-    st.write(f"**Min Bet Size:** ${config.MIN_BET_SIZE_USD:,.0f}")
-    st.write(f"**Poll Interval:** {config.POLL_INTERVAL_SECONDS}s")
-    st.write(f"**Telegram Configured:** {'Yes' if config.TELEGRAM_CHAT_ID else 'No'}")
-    st.write(f"**Database:** SQLite (local)")
+    st.markdown('<h2 style="font-family: var(--font-heading); text-transform: uppercase;">SYSTEM INFORMATION</h2>', unsafe_allow_html=True)
+
+    st.markdown(f"""
+    <div class="card">
+        <table style="width: 100%; border: none;">
+            <tr style="background: transparent;">
+                <td style="border: none; font-family: var(--font-heading); text-transform: uppercase;">Min Bet Size:</td>
+                <td style="border: none; font-family: var(--font-mono); text-align: right;">${config.MIN_BET_SIZE_USD:,.0f}</td>
+            </tr>
+            <tr style="background: transparent;">
+                <td style="border: none; font-family: var(--font-heading); text-transform: uppercase;">Poll Interval:</td>
+                <td style="border: none; font-family: var(--font-mono); text-align: right;">{config.POLL_INTERVAL_SECONDS}s</td>
+            </tr>
+            <tr style="background: transparent;">
+                <td style="border: none; font-family: var(--font-heading); text-transform: uppercase;">Telegram Configured:</td>
+                <td style="border: none; font-family: var(--font-mono); text-align: right;">{'✓ Yes' if config.TELEGRAM_CHAT_ID else '✗ No'}</td>
+            </tr>
+            <tr style="background: transparent;">
+                <td style="border: none; font-family: var(--font-heading); text-transform: uppercase;">Database:</td>
+                <td style="border: none; font-family: var(--font-mono); text-align: right;">SQLite (local)</td>
+            </tr>
+        </table>
+    </div>
+    """, unsafe_allow_html=True)
 
 
 def get_alert_level(score: int) -> str:
